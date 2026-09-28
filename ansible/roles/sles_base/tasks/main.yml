@@ -11,24 +11,38 @@
       {{ 'Has the post-6.4 Landlock network rules.' if ansible_facts['kernel'] is version('6.12','>=')
          else 'Older than 6.12 — Landlock network rules and scoping are absent; SLES 16.0 is preferable.' }}
 
+- name: Read SCC registration status
+  ansible.builtin.command: SUSEConnect --status
+  register: scc_status
+  changed_when: false
+
+- name: Parse it
+  ansible.builtin.set_fact:
+    scc_registered: >-
+      {{ scc_status.stdout | from_json | selectattr('status', 'equalto', 'Registered')
+         | map(attribute='identifier') | list }}
+
+# cloud-init already registered the base product on first boot (vm_create puts
+# the code in user-data), so this normally skips. It only runs if that didn't
+# happen — an image without cloud-init, or a seed built without the code.
 - name: Register with SCC
   ansible.builtin.command: SUSEConnect -r {{ scc_regcode }}
-  register: scc
-  changed_when: "'Successfully registered' in scc.stdout"
-  failed_when: scc.rc != 0 and 'already registered' not in scc.stdout
+  when: "'SLES' not in scc_registered"
   no_log: true
 
 - name: Enable required modules
   ansible.builtin.command: SUSEConnect -p {{ item }}
   loop: "{{ sles_modules }}"
+  when: item.split('/')[0] not in scc_registered
   register: mod
-  changed_when: "'Successfully activated' in mod.stdout"
-  failed_when: mod.rc != 0 and 'already activated' not in mod.stdout
-  no_log: true
+  changed_when: "'Successfully' in mod.stdout"
+  failed_when: mod.rc != 0 and 'already' not in (mod.stdout ~ mod.stderr)
 
+# No iptables (RKE2 ships its own) and no python3-kubernetes (nothing here
+# uses the kubernetes.core modules — the rke2 role shells out to kubectl).
 - name: Install base packages
   community.general.zypper:
-    name: [git, curl, jq, tar, gzip, iptables, python3-kubernetes]
+    name: [git, curl, jq, tar, gzip]
     state: present
 
 # ── Landlock ─────────────────────────────────────────────────────────────

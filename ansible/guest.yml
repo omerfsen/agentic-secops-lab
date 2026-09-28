@@ -1,8 +1,7 @@
 ---
 # Part 2 — runs against the VM over SSH, using the key host.yml generated.
 #
-#   ansible-playbook guest.yml \
-#     --private-key .keys/secops-lab_ed25519 -u sles
+#   ansible-playbook guest.yml     # user and key come from inventory.ini
 #
 # Stops at a working single-node RKE2 with the GPU visible. The OpenShell and
 # agent layer is deliberately not automated — see docs/ for why.

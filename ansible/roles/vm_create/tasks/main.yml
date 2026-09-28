@@ -60,6 +60,12 @@
   changed_when: true
 
 # ── cloud-init: static IP on the bridge, key installed, SCC registered ───
+- name: Stage directory for the seed files
+  ansible.builtin.file:
+    path: "/tmp/seed-{{ vm_name }}"
+    state: directory
+    mode: "0700"
+
 - name: Build cloud-init seed
   ansible.builtin.copy:
     dest: "/tmp/seed-{{ vm_name }}/{{ item.name }}"
@@ -91,7 +97,8 @@
         version: 2
         ethernets:
           eth0:
-            match: {name: "en*"}
+            # e* rather than en*: SUSE images may ship net.ifnames=0 (eth0)
+            match: {name: "e*"}
             dhcp4: false
             addresses: [{{ vm_ip }}/{{ vm_prefix }}]
             routes:
@@ -122,6 +129,7 @@
   register: dominfo
   failed_when: false
   changed_when: false
+  check_mode: false
 
 - name: Create the VM
   ansible.builtin.command: >-

@@ -1,8 +1,11 @@
 ---
+# tar, not rpm: the installer would otherwise pick rpm on SUSE, which needs a
+# distro-specific repo and puts the binary at /usr/bin/rke2 — so `creates`
+# below would never match and every run would reinstall.
 - name: Install RKE2 server
   ansible.builtin.shell: |
     set -o pipefail
-    curl -sfL https://get.rke2.io | {% if rke2_version %}INSTALL_RKE2_VERSION={{ rke2_version }} {% endif %}sh -
+    curl -sfL https://get.rke2.io | INSTALL_RKE2_METHOD=tar {% if rke2_version %}INSTALL_RKE2_VERSION={{ rke2_version }} {% endif %}sh -
   args:
     executable: /bin/bash
     creates: /usr/local/bin/rke2

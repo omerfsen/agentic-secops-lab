@@ -24,6 +24,25 @@
     append: true
   when: ansible_env.SUDO_USER is defined
 
+# ── Broad sanity check before the granular GPU-specific ones below ────────
+- name: Run virt-host-validate
+  ansible.builtin.command: virt-host-validate qemu
+  register: host_validate
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Show virt-host-validate output
+  ansible.builtin.debug:
+    msg: "{{ host_validate.stdout_lines }}"
+
+- name: Fail if virt-host-validate found a blocking issue
+  ansible.builtin.assert:
+    that: host_validate.rc == 0
+    fail_msg: >-
+      virt-host-validate found a blocking issue (a FAIL line above, not just a
+      WARN) — this host cannot run KVM guests as currently configured.
+
 # ── IOMMU ────────────────────────────────────────────────────────────────
 - name: Check IOMMU is enabled
   ansible.builtin.find:
@@ -49,6 +68,7 @@
     readlink -f /sys/bus/pci/devices/{{ item }}/iommu_group | xargs basename
   args: {executable: /bin/bash}
   changed_when: false
+  check_mode: false
   loop: "{{ gpu_pci_ids }}"
   register: gpu_groups
 
@@ -58,6 +78,7 @@
     ls /sys/kernel/iommu_groups/{{ item }}/devices/
   args: {executable: /bin/bash}
   changed_when: false
+  check_mode: false
   loop: "{{ gpu_groups.results | map(attribute='stdout') | unique | list }}"
   register: group_members
 
@@ -67,14 +88,13 @@
   loop: "{{ group_members.results }}"
   loop_control: {label: "group {{ item.item }}"}
 
+# sysfs lists group members in full DDDD:BB:DD.F form, same as gpu_pci_ids.
 - name: Fail if a group contains devices you are not passing through
   ansible.builtin.assert:
-    that: >-
-      item.stdout_lines | map('regex_replace', '^', '0000:') | list
-      | difference(gpu_pci_ids) | length == 0
+    that: item.stdout_lines | difference(gpu_pci_ids) | length == 0
     fail_msg: >-
       IOMMU group {{ item.item }} also contains
-      {{ item.stdout_lines | map('regex_replace', '^', '0000:') | list | difference(gpu_pci_ids) | join(', ') }}.
+      {{ item.stdout_lines | difference(gpu_pci_ids) | join(', ') }}.
       Passthrough is all-or-nothing per group — either add these to gpu_pci_ids
       (if the guest can own them) or move the card to a slot with cleaner
       grouping. Consumer boards frequently group the GPU with a PCIe port or an
@@ -82,25 +102,58 @@
   loop: "{{ group_members.results }}"
   loop_control: {label: "group {{ item.item }}"}
 
+# ── Is the card also the firmware's boot display? ─────────────────────────
+- name: Check whether a passthrough function is the boot VGA device
+  ansible.builtin.shell: |
+    set -o pipefail
+    cat /sys/bus/pci/devices/{{ item }}/boot_vga 2>/dev/null || echo 0
+  args: {executable: /bin/bash}
+  changed_when: false
+  check_mode: false
+  loop: "{{ gpu_pci_ids }}"
+  register: boot_vga
+
+- name: Warn if the firmware framebuffer sits on the card being passed through
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item }} is the boot VGA device, so the firmware console
+      framebuffer lives on the card you are handing to the guest. This usually
+      still works on a 6.x kernel, but if the guest later fails to start with
+      "can't reserve BAR" errors: make another GPU (an iGPU, if there is one)
+      the primary display in firmware, or add
+      initcall_blacklist=simpledrm_platform_driver_init to the kernel cmdline
+      — this play won't edit your bootloader. Either way, a local host console
+      needs to be on a different GPU from now on; this one goes dark once
+      vfio-pci owns it.
+  loop: "{{ boot_vga.results }}"
+  loop_control: {label: "{{ item.item }}"}
+  when: item.stdout | trim == '1'
+
 # ── Nothing on the host may hold the card ────────────────────────────────
+# No hard-fail here on purpose: on a genuinely first run the GPU is *expected*
+# to still be on the host driver (nvidia/nouveau) — that's exactly the state
+# the blacklist + vfio.conf tasks below fix. Failing before they even get a
+# chance to run would make the "reboot and run again" flow described in
+# host.yml and README.md impossible to reach. The real gate is the assert at
+# the bottom, after a reboot has had a chance to apply the new config.
 - name: Check which driver currently owns each function
   ansible.builtin.shell: |
     set -o pipefail
     basename "$(readlink -f /sys/bus/pci/devices/{{ item }}/driver 2>/dev/null)" 2>/dev/null || echo none
   args: {executable: /bin/bash}
   changed_when: false
+  check_mode: false
   loop: "{{ gpu_pci_ids }}"
   register: current_drivers
 
-- name: Fail if a host driver has claimed the GPU
-  ansible.builtin.assert:
-    that: item.stdout in ['vfio-pci', 'none']
-    fail_msg: >-
-      {{ item.item }} is bound to '{{ item.stdout }}'. The host must not drive a
-      card it is passing through. Blacklist nouveau and the NVIDIA host driver,
-      bind the device to vfio-pci, and reboot.
+- name: Report current driver binding
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item }} -> {{ item.stdout }}
+      {{ '(host driver still owns this — expected before the first reboot)'
+         if item.stdout not in ['vfio-pci', 'none'] else '' }}
   loop: "{{ current_drivers.results }}"
-  loop_control: {label: "{{ item.item }} -> {{ item.stdout }}" }
+  loop_control: {label: "{{ item.item }}"}
 
 - name: Blacklist host GPU drivers
   ansible.builtin.copy:
@@ -112,19 +165,42 @@
       blacklist nvidia_drm
       blacklist nvidia_modeset
       options nouveau modeset=0
-  notify: rebuild initrd
+  register: gpu_blacklist
 
+# The softdeps cover anything that still loads a driver by name despite the
+# blacklist (nvidia-modprobe, udev coldplug of the HDMI audio function via
+# snd_hda_intel): vfio-pci is loaded first and claims the ids, so the other
+# driver finds nothing left to bind.
 - name: Bind the devices to vfio-pci at boot
   ansible.builtin.copy:
     dest: /etc/modprobe.d/vfio.conf
     mode: "0644"
     content: |
-      options vfio-pci ids={{ vfio_device_ids | join(',') }}
+      options vfio-pci ids={{ vfio_device_ids | join(',') }} disable_vga=1
       softdep nvidia pre: vfio-pci
       softdep nouveau pre: vfio-pci
+      softdep snd_hda_intel pre: vfio-pci
   vars:
     vfio_device_ids: "{{ gpu_vendor_device_ids.results | map(attribute='stdout') | list }}"
-  notify: rebuild initrd
+  register: vfio_bind
+
+# With the host driver blacklisted nothing would pull vfio-pci in on its own
+# at boot — load it explicitly so it claims the card before anything else.
+- name: Load vfio-pci at boot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/vfio-pci.conf
+    mode: "0644"
+    content: |
+      vfio-pci
+  register: vfio_modload
+
+# A plain task rather than a handler: handlers are skipped when a play fails,
+# and the assert below fails by design on a first run. The initrd has to be
+# rebuilt before that point or the reboot changes nothing.
+- name: Rebuild the initrd so the new modprobe config is in it
+  ansible.builtin.command: "{{ initrd_rebuild_cmd }}"
+  when: gpu_blacklist.changed or vfio_bind.changed or vfio_modload.changed
+  changed_when: true
 
 - name: Confirm vfio-pci is bound to every requested function
   ansible.builtin.shell: |
@@ -132,6 +208,7 @@
     basename "$(readlink -f /sys/bus/pci/devices/{{ item }}/driver 2>/dev/null)" 2>/dev/null || echo none
   args: {executable: /bin/bash}
   changed_when: false
+  check_mode: false
   loop: "{{ gpu_pci_ids }}"
   register: final_drivers
 
@@ -143,13 +220,18 @@
   loop: "{{ final_drivers.results }}"
   loop_control: {label: "{{ item.item }}"}
 
-- name: Fail if any function is still unbound after a previous run
+# This is the real gate. Failing here on a first run is expected and correct:
+# the modprobe config above only takes effect after a reboot, and vm_create
+# must not run against a GPU the host driver still owns.
+- name: Stop here until the GPU is actually on vfio-pci
   ansible.builtin.assert:
     that: item.stdout == 'vfio-pci'
     fail_msg: >-
-      {{ item.item }} is not bound to vfio-pci. If this is the first run, reboot
-      and run again — the initrd was just rebuilt. If it persists, the host
-      driver is loading earlier than vfio-pci.
+      {{ item.item }} is still on '{{ item.stdout }}', not vfio-pci. If the
+      blacklist/vfio tasks above just changed something, this is the expected
+      first-run stop: REBOOT the host, then run host.yml again and it will
+      carry on into vm_create. If nothing changed and it still isn't vfio-pci
+      after a reboot, the host driver is loading before vfio-pci — check
+      `lsinitramfs` (Ubuntu) / `lsinitrd` (SLES) for the vfio.conf options.
   loop: "{{ final_drivers.results }}"
-  when: not first_run | default(false)
   loop_control: {label: "{{ item.item }}"}
