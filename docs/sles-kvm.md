@@ -77,6 +77,28 @@ mechanical:
 intel_iommu=on iommu=pt       # or: amd_iommu=on
 ```
 
+**Intel and AMD behave differently here, and the difference bites people.** On
+Intel, VT-d being on in firmware is usually not enough by itself — the kernel
+still needs `intel_iommu=on` on the cmdline, or `/sys/kernel/iommu_groups` stays
+empty even though the BIOS setting is correct. AMD-Vi more often self-enables
+once the firmware setting is on, with no cmdline flag at all — confirmed on the
+Ryzen 9900X this was worked out on: 29 populated IOMMU groups with no
+`amd_iommu=on` anywhere in `/proc/cmdline`. `iommu=pt` is a host-side DMA
+performance optimisation either way, not what gates whether groups appear —
+don't mistake "groups are empty" for "iommu=pt is missing" and add it expecting
+that alone to fix it, particularly on Intel.
+
+Check what you actually have before assuming either way:
+
+```bash
+cat /proc/cmdline                          # what's actually set
+ls /sys/kernel/iommu_groups/ | wc -l        # 0 = IOMMU is not active, full stop
+```
+
+`ansible/roles/kvm_host` asserts on the second one and refuses to continue if
+it's zero — it won't guess at which cmdline flag you're missing, since that
+depends on vendor.
+
 - Bind the GPU's **entire IOMMU group** to `vfio-pci`, not just the GPU function
 - Guest machine type `q35` with OVMF firmware
 - CPU mode `host-passthrough`
