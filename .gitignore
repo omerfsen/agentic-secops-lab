@@ -32,8 +32,11 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Ansible — local config and generated keys
+# Ansible — local config, secrets and generated keys
+# The vault password itself lives outside the repo at ~/.secops-lab-vault-pass,
+# not here — see ansible/README.md#secrets.
 ansible/inventory.ini
 ansible/group_vars/all.yml
+ansible/group_vars/vault.yml
 ansible/.keys/
 *.retry

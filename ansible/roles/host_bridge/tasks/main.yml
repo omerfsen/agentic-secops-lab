@@ -1,0 +1,94 @@
+---
+# Builds the bridge vm_create attaches the guest to. Idempotent: if vm_bridge
+# already exists we leave host networking alone entirely, so a hand-built
+# bridge (or a re-run) is never touched.
+#
+# Netplan/Debian only. A SLES host manages networking with wicked or
+# NetworkManager instead — pre-build the bridge yourself there and this role
+# will just skip it, same as it does on a re-run here.
+
+- name: Check whether the target bridge already exists
+  ansible.builtin.stat:
+    path: "/sys/class/net/{{ vm_bridge }}"
+  register: existing_bridge
+
+- name: Bridge already present — nothing to do
+  ansible.builtin.debug:
+    msg: "{{ vm_bridge }} already exists, leaving host networking as-is."
+  when: existing_bridge.stat.exists
+
+- block:
+    - name: Fail loudly on a non-Debian host
+      ansible.builtin.assert:
+        that: ansible_facts['os_family'] == 'Debian'
+        fail_msg: >-
+          Automatic bridge creation only covers netplan (Ubuntu/Debian). On SLES,
+          pre-build {{ vm_bridge }} yourself with wicked or NetworkManager first —
+          this role only fails closed instead of guessing at wicked config syntax.
+
+    - name: Determine the NIC carrying the default route
+      ansible.builtin.set_fact:
+        host_bridge_uplink: "{{ ansible_default_ipv4.interface | default('') }}"
+      when: host_bridge_uplink | length == 0
+
+    - name: Fail if no uplink could be determined
+      ansible.builtin.assert:
+        that: host_bridge_uplink is defined and host_bridge_uplink | length > 0
+        fail_msg: >-
+          Could not work out which NIC to bridge (no default route found, or
+          more than one candidate). Set host_bridge_uplink explicitly in
+          group_vars/all.yml, e.g. host_bridge_uplink: enp3s0.
+
+    - name: Warn that connectivity will blip while the bridge comes up
+      ansible.builtin.debug:
+        msg: >-
+          Moving {{ host_bridge_uplink }} into {{ vm_bridge }} now. The control
+          connection will drop for a few seconds while it re-acquires DHCP on
+          the bridge — this is expected, the play waits for it to come back.
+
+    - name: Write the bridge netplan config
+      ansible.builtin.copy:
+        dest: "/etc/netplan/90-{{ vm_name }}-bridge.yaml"
+        mode: "0600"
+        content: |
+          network:
+            version: 2
+            ethernets:
+              {{ host_bridge_uplink }}:
+                dhcp4: no
+                dhcp6: no
+            bridges:
+              {{ vm_bridge }}:
+                interfaces: [{{ host_bridge_uplink }}]
+                dhcp4: true
+                parameters:
+                  stp: false
+                  forward-delay: 0
+      register: bridge_netplan
+
+    - name: Validate the generated netplan config
+      ansible.builtin.command: netplan generate
+      changed_when: false
+
+    - name: Apply the bridge
+      ansible.builtin.command: netplan apply
+      when: bridge_netplan.changed
+      async: 1
+      poll: 0
+
+    - name: Wait for the control connection to come back on the bridge
+      ansible.builtin.wait_for_connection:
+        delay: 5
+        timeout: 120
+      when: bridge_netplan.changed
+
+    - name: Confirm the bridge is up
+      ansible.builtin.command: ip -br link show {{ vm_bridge }}
+      changed_when: false
+      check_mode: false
+      register: bridge_state
+
+    - name: Report bridge state
+      ansible.builtin.debug:
+        msg: "{{ bridge_state.stdout }}"
+  when: not existing_bridge.stat.exists

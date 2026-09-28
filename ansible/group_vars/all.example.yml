@@ -10,13 +10,19 @@ vm_disk_gb: 500
 vm_disk_path: /var/lib/libvirt/images
 
 # ── Network: bridged, static ─────────────────────────────────────────────
-# The bridge must already exist on the host (e.g. br0 over enp3s0).
-vm_bridge: br0
+# If this bridge doesn't already exist, host.yml creates it (Debian/Ubuntu
+# only — see ansible/README.md#network). Already have one? It's left alone.
+vm_bridge: br10
 vm_ip: 192.168.1.50
 vm_prefix: 24
 vm_gateway: 192.168.1.1
 vm_dns: [1.1.1.1, 8.8.8.8]
 vm_hostname: secops-lab
+
+# Which host NIC to fold into vm_bridge when it has to be created. Empty =
+# auto-detect the NIC currently carrying the default route (the common case
+# on a fresh single-NIC install). Set explicitly if that guess is wrong.
+host_bridge_uplink: ""
 
 # ── GPU passthrough ──────────────────────────────────────────────────────
 # Both functions: the GPU and its HDMI audio device. Find them with:
@@ -41,8 +47,12 @@ sles_image_checksum: ""      # sha256:...
 # SUSE Customer Center registration code. A 60-day trial code is issued on
 # registration at https://www.suse.com/download/sles/ — no subscription needed
 # to build this. The clock starts at registration, not at first boot.
-scc_regcode: ""
-ssh_public_key: "{{ lookup('file', '~/.ssh/id_ed25519.pub') }}"
+#
+# Don't put the real code here — see ansible/README.md#secrets. Create
+# group_vars/vault.yml (ansible-vault, gitignored either way) with:
+#   vault_scc_regcode: "your-code-here"
+# then encrypt it: ansible-vault encrypt group_vars/vault.yml
+scc_regcode: "{{ vault_scc_regcode }}"
 
 # ── Versions ─────────────────────────────────────────────────────────────
 rke2_version: ""             # empty = latest stable

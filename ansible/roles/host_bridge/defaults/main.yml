@@ -1,0 +1,6 @@
+---
+# Empty = auto-detect the NIC currently carrying the default route. Set this
+# explicitly if that detection picks the wrong interface (e.g. multiple NICs
+# with an existing default route, or none at all — a truly fresh install with
+# only DHCP configured will have exactly one, so auto-detect is the common case).
+host_bridge_uplink: ""

@@ -12,5 +12,6 @@
   become: true
   gather_facts: true
   roles:
+    - host_bridge
     - kvm_host
     - vm_create
