@@ -1,0 +1,145 @@
+---
+# Preflight for GPU passthrough. Every check here fails the play rather than
+# warning: a half-configured passthrough produces a VM that boots fine and has
+# no usable GPU, which is much harder to diagnose later.
+
+- name: Read GPU vendor:device ids
+  ansible.builtin.include_tasks: vendor_ids.yml
+
+- name: Install virtualisation packages
+  community.general.zypper:
+    name: [libvirt, qemu-kvm, virt-install, libvirt-client, guestfs-tools, cdrtools]
+    state: present
+
+- name: Ensure libvirtd is running
+  ansible.builtin.systemd:
+    name: libvirtd
+    state: started
+    enabled: true
+
+# ── IOMMU ────────────────────────────────────────────────────────────────
+- name: Check IOMMU is enabled
+  ansible.builtin.find:
+    paths: /sys/kernel/iommu_groups
+    file_type: directory
+  register: iommu_groups
+
+- name: Fail if IOMMU is off
+  ansible.builtin.assert:
+    that: iommu_groups.matched > 0
+    fail_msg: >-
+      No IOMMU groups found. Add intel_iommu=on iommu=pt (or amd_iommu=on) to the
+      kernel command line, regenerate grub, and reboot. Without IOMMU the GPU
+      cannot be passed through at all.
+
+# ── The GPU's IOMMU group must contain nothing else ───────────────────────
+- name: Resolve the IOMMU group of each requested device
+  ansible.builtin.shell: |
+    set -o pipefail
+    readlink -f /sys/bus/pci/devices/{{ item }}/iommu_group | xargs basename
+  args: {executable: /bin/bash}
+  changed_when: false
+  loop: "{{ gpu_pci_ids }}"
+  register: gpu_groups
+
+- name: List every device sharing those groups
+  ansible.builtin.shell: |
+    set -o pipefail
+    ls /sys/kernel/iommu_groups/{{ item }}/devices/
+  args: {executable: /bin/bash}
+  changed_when: false
+  loop: "{{ gpu_groups.results | map(attribute='stdout') | unique | list }}"
+  register: group_members
+
+- name: Show what is in each group
+  ansible.builtin.debug:
+    msg: "IOMMU group {{ item.item }} contains: {{ item.stdout_lines | join(', ') }}"
+  loop: "{{ group_members.results }}"
+  loop_control: {label: "group {{ item.item }}"}
+
+- name: Fail if a group contains devices you are not passing through
+  ansible.builtin.assert:
+    that: >-
+      item.stdout_lines | map('regex_replace', '^', '0000:') | list
+      | difference(gpu_pci_ids) | length == 0
+    fail_msg: >-
+      IOMMU group {{ item.item }} also contains
+      {{ item.stdout_lines | map('regex_replace', '^', '0000:') | list | difference(gpu_pci_ids) | join(', ') }}.
+      Passthrough is all-or-nothing per group — either add these to gpu_pci_ids
+      (if the guest can own them) or move the card to a slot with cleaner
+      grouping. Consumer boards frequently group the GPU with a PCIe port or an
+      NVMe controller.
+  loop: "{{ group_members.results }}"
+  loop_control: {label: "group {{ item.item }}"}
+
+# ── Nothing on the host may hold the card ────────────────────────────────
+- name: Check which driver currently owns each function
+  ansible.builtin.shell: |
+    set -o pipefail
+    basename "$(readlink -f /sys/bus/pci/devices/{{ item }}/driver 2>/dev/null)" 2>/dev/null || echo none
+  args: {executable: /bin/bash}
+  changed_when: false
+  loop: "{{ gpu_pci_ids }}"
+  register: current_drivers
+
+- name: Fail if a host driver has claimed the GPU
+  ansible.builtin.assert:
+    that: item.stdout in ['vfio-pci', 'none']
+    fail_msg: >-
+      {{ item.item }} is bound to '{{ item.stdout }}'. The host must not drive a
+      card it is passing through. Blacklist nouveau and the NVIDIA host driver,
+      bind the device to vfio-pci, and reboot.
+  loop: "{{ current_drivers.results }}"
+  loop_control: {label: "{{ item.item }} -> {{ item.stdout }}" }
+
+- name: Blacklist host GPU drivers
+  ansible.builtin.copy:
+    dest: /etc/modprobe.d/blacklist-gpu-passthrough.conf
+    mode: "0644"
+    content: |
+      blacklist nouveau
+      blacklist nvidia
+      blacklist nvidia_drm
+      blacklist nvidia_modeset
+      options nouveau modeset=0
+  notify: rebuild initrd
+
+- name: Bind the devices to vfio-pci at boot
+  ansible.builtin.copy:
+    dest: /etc/modprobe.d/vfio.conf
+    mode: "0644"
+    content: |
+      options vfio-pci ids={{ vfio_device_ids | join(',') }}
+      softdep nvidia pre: vfio-pci
+      softdep nouveau pre: vfio-pci
+  vars:
+    vfio_device_ids: "{{ gpu_vendor_device_ids.results | map(attribute='stdout') | list }}"
+  notify: rebuild initrd
+
+- name: Confirm vfio-pci is bound to every requested function
+  ansible.builtin.shell: |
+    set -o pipefail
+    basename "$(readlink -f /sys/bus/pci/devices/{{ item }}/driver 2>/dev/null)" 2>/dev/null || echo none
+  args: {executable: /bin/bash}
+  changed_when: false
+  loop: "{{ gpu_pci_ids }}"
+  register: final_drivers
+
+- name: Report binding state
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item }} -> {{ item.stdout }}
+      {{ '(ready)' if item.stdout == 'vfio-pci' else '(NOT bound — reboot required after the initrd rebuild)' }}
+  loop: "{{ final_drivers.results }}"
+  loop_control: {label: "{{ item.item }}"}
+
+- name: Fail if any function is still unbound after a previous run
+  ansible.builtin.assert:
+    that: item.stdout == 'vfio-pci'
+    fail_msg: >-
+      {{ item.item }} is not bound to vfio-pci. If this is the first run, reboot
+      and run again — the initrd was just rebuilt. If it persists, the host
+      driver is loading earlier than vfio-pci.
+  loop: "{{ final_drivers.results }}"
+  when: not first_run | default(false)
+  loop_control: {label: "{{ item.item }}"}

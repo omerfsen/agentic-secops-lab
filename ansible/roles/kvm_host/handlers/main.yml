@@ -1,0 +1,4 @@
+---
+- name: rebuild initrd
+  ansible.builtin.command: dracut -f --regenerate-all
+  changed_when: true

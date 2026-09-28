@@ -1,0 +1,4 @@
+---
+vm_user: sles
+ssh_key_dir: "{{ playbook_dir }}/.keys"
+ssh_key_path: "{{ ssh_key_dir }}/{{ vm_name }}_ed25519"

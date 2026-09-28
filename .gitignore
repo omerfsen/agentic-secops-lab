@@ -31,3 +31,9 @@ __pycache__/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Ansible — local config and generated keys
+ansible/inventory.ini
+ansible/group_vars/all.yml
+ansible/.keys/
+*.retry

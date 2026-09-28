@@ -1,0 +1,4 @@
+---
+sles_modules:
+  - sle-module-containers/{{ ansible_facts['distribution_version'] }}/x86_64
+  - sle-module-NVIDIA-compute/{{ ansible_facts['distribution_major_version'] }}/x86_64

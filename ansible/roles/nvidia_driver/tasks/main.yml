@@ -1,0 +1,38 @@
+---
+- name: Blacklist nouveau in the guest
+  ansible.builtin.copy:
+    dest: /etc/modprobe.d/blacklist-nouveau.conf
+    mode: "0644"
+    content: |
+      blacklist nouveau
+      options nouveau modeset=0
+  notify: rebuild guest initrd
+
+- name: Install the G07 driver (Turing and newer)
+  community.general.zypper:
+    name: [nvidia-open-driver-G06-signed-kmp-default, nvidia-compute-utils-G06]
+    state: present
+  register: driver_install
+
+- name: Reboot if the driver was just installed
+  ansible.builtin.reboot:
+    reboot_timeout: 600
+  when: driver_install.changed
+
+- name: Confirm the GPU is visible to the guest
+  ansible.builtin.command: nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
+  register: smi
+  changed_when: false
+  failed_when: smi.rc != 0
+
+- name: Report the GPU
+  ansible.builtin.debug:
+    msg: "GPU visible: {{ smi.stdout }}"
+
+- name: Warn if VRAM is under 24 GB
+  ansible.builtin.debug:
+    msg: >-
+      {{ (smi.stdout.split(',')[1] | trim) }} of VRAM. A 30B checkpoint is ~17-18 GB
+      at 4-bit, so it will not fit alongside KV cache — expect expert offload to
+      system RAM, or use a 9B in FP8. See docs/gpu-sizing.md.
+  when: (smi.stdout.split(',')[1] | trim | regex_replace('[^0-9]','') | int) < 24000

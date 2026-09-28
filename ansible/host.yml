@@ -1,0 +1,16 @@
+---
+# Part 1 — runs on the KVM host. Verifies the GPU can actually be handed over,
+# then builds the VM and leaves you with an SSH key that reaches it.
+#
+#   ansible-playbook host.yml --check     # dry run
+#   ansible-playbook host.yml
+#
+# On a first run the GPU is usually still bound to a host driver: the play
+# rebuilds the initrd and tells you to reboot. Run it again afterwards.
+- name: Prepare the KVM host and create the SLES guest
+  hosts: kvm_host
+  become: true
+  gather_facts: true
+  roles:
+    - kvm_host
+    - vm_create

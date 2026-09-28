@@ -10,6 +10,8 @@ Two things live here:
   licences, and which are actually integrated today versus announced.
 - **Install notes** — [what fits on one VM](docs/single-vm.md),
   [SLES and KVM setup](docs/sles-kvm.md), and [GPU sizing](docs/gpu-sizing.md).
+- **[Ansible](ansible/)** — two playbooks: build the VM on the KVM host, then
+  provision it. Untested; see its README.
 
 ## What this is not
 

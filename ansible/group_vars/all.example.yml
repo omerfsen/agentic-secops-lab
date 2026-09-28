@@ -1,0 +1,37 @@
+# Copy to all.yml and edit. all.yml is gitignored — it holds the SCC code.
+---
+# ── VM shape ─────────────────────────────────────────────────────────────
+vm_name: secops-lab
+vm_vcpus: 16
+vm_memory_mb: 65536          # 128 GB if you plan to offload MoE experts
+vm_disk_gb: 500
+vm_disk_path: /var/lib/libvirt/images
+
+# ── Network: bridged, static ─────────────────────────────────────────────
+# The bridge must already exist on the host (e.g. br0 over enp3s0).
+vm_bridge: br0
+vm_ip: 192.168.1.50
+vm_prefix: 24
+vm_gateway: 192.168.1.1
+vm_dns: [1.1.1.1, 8.8.8.8]
+vm_hostname: secops-lab
+
+# ── GPU passthrough ──────────────────────────────────────────────────────
+# Both functions: the GPU and its HDMI audio device. Find them with:
+#   lspci -nn | grep -i nvidia
+gpu_pci_ids:
+  - "0000:01:00.0"
+  - "0000:01:00.1"
+
+# ── SLES image ───────────────────────────────────────────────────────────
+# A SLES qcow2 cloud image. 16.0 preferred: its 6.12 kernel has the Landlock
+# network rules that 15 SP6/SP7 (6.4) lack.
+sles_image_url: ""           # e.g. https://.../SLES16.0-Minimal-VM.x86_64.qcow2
+sles_image_checksum: ""      # sha256:...
+
+# ── Credentials — do not commit ──────────────────────────────────────────
+scc_regcode: ""              # SUSE Customer Center registration code
+ssh_public_key: "{{ lookup('file', '~/.ssh/id_ed25519.pub') }}"
+
+# ── Versions ─────────────────────────────────────────────────────────────
+rke2_version: ""             # empty = latest stable

@@ -1,0 +1,51 @@
+---
+- name: Confirm we are on SLES
+  ansible.builtin.assert:
+    that: ansible_facts['distribution'] == 'SLES'
+    fail_msg: "Expected SLES, found {{ ansible_facts['distribution'] }}."
+
+- name: Report kernel version
+  ansible.builtin.debug:
+    msg: >-
+      Kernel {{ ansible_facts['kernel'] }}.
+      {{ 'Has the post-6.4 Landlock network rules.' if ansible_facts['kernel'] is version('6.12','>=')
+         else 'Older than 6.12 — Landlock network rules and scoping are absent; SLES 16.0 is preferable.' }}
+
+- name: Register with SCC
+  ansible.builtin.command: SUSEConnect -r {{ scc_regcode }}
+  register: scc
+  changed_when: "'Successfully registered' in scc.stdout"
+  failed_when: scc.rc != 0 and 'already registered' not in scc.stdout
+  no_log: true
+
+- name: Enable required modules
+  ansible.builtin.command: SUSEConnect -p {{ item }}
+  loop: "{{ sles_modules }}"
+  register: mod
+  changed_when: "'Successfully activated' in mod.stdout"
+  failed_when: mod.rc != 0 and 'already activated' not in mod.stdout
+  no_log: true
+
+- name: Install base packages
+  community.general.zypper:
+    name: [git, curl, jq, tar, gzip, iptables, python3-kubernetes]
+    state: present
+
+# ── Landlock ─────────────────────────────────────────────────────────────
+# OpenShell's policies default to best_effort, so a missing LSM degrades
+# enforcement silently. That is the single worst failure mode in this build:
+# the sandbox reports healthy and is not one. Fail here instead.
+- name: Read the active LSM list
+  ansible.builtin.slurp:
+    src: /sys/kernel/security/lsm
+  register: lsm_list
+
+- name: Fail if Landlock is not active
+  ansible.builtin.assert:
+    that: "'landlock' in (lsm_list.content | b64decode)"
+    success_msg: "Landlock is active: {{ lsm_list.content | b64decode }}"
+    fail_msg: >-
+      Landlock is NOT in the active LSM list ({{ lsm_list.content | b64decode }}).
+      Add it to the lsm= kernel parameter and reboot. Do not continue: OpenShell
+      will fall back to best_effort and report a healthy sandbox that enforces
+      nothing.

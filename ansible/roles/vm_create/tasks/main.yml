@@ -1,0 +1,158 @@
+---
+# Builds the guest: a dedicated SSH keypair, a cloud-init seed carrying the
+# static network config and that key, then virt-install with the GPU attached.
+
+# ── Dedicated keypair, generated on the control node ─────────────────────
+- name: Ensure key directory exists
+  ansible.builtin.file:
+    path: "{{ ssh_key_dir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Generate an SSH keypair for this lab
+  community.crypto.openssh_keypair:
+    path: "{{ ssh_key_path }}"
+    type: ed25519
+    comment: "ansible@{{ vm_name }}"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  register: lab_key
+
+- name: Read the public key
+  ansible.builtin.slurp:
+    src: "{{ ssh_key_path }}.pub"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  register: lab_pubkey
+
+- name: Report where the key lives
+  ansible.builtin.debug:
+    msg: >-
+      Key: {{ ssh_key_path }} ({{ 'newly generated' if lab_key.changed else 'existing, reused' }}).
+      Connect with: ssh -i {{ ssh_key_path }} {{ vm_user }}@{{ vm_ip }}
+
+# ── Base image ───────────────────────────────────────────────────────────
+- name: Fetch the SLES qcow2
+  ansible.builtin.get_url:
+    url: "{{ sles_image_url }}"
+    dest: "{{ vm_disk_path }}/{{ sles_image_url | basename }}"
+    checksum: "{{ sles_image_checksum | default(omit) }}"
+    mode: "0644"
+
+- name: Copy it to the VM's disk
+  ansible.builtin.copy:
+    src: "{{ vm_disk_path }}/{{ sles_image_url | basename }}"
+    dest: "{{ vm_disk_path }}/{{ vm_name }}.qcow2"
+    remote_src: true
+    force: false
+    mode: "0600"
+  register: vm_disk
+
+- name: Grow it to the requested size
+  ansible.builtin.command: qemu-img resize {{ vm_disk_path }}/{{ vm_name }}.qcow2 {{ vm_disk_gb }}G
+  when: vm_disk.changed
+  changed_when: true
+
+# ── cloud-init: static IP on the bridge, key installed, SCC registered ───
+- name: Build cloud-init seed
+  ansible.builtin.copy:
+    dest: "/tmp/seed-{{ vm_name }}/{{ item.name }}"
+    mode: "0644"
+    content: "{{ item.content }}"
+  loop:
+    - name: meta-data
+      content: |
+        instance-id: {{ vm_name }}
+        local-hostname: {{ vm_hostname }}
+    - name: user-data
+      content: |
+        #cloud-config
+        hostname: {{ vm_hostname }}
+        users:
+          - name: {{ vm_user }}
+            sudo: ALL=(ALL) NOPASSWD:ALL
+            shell: /bin/bash
+            lock_passwd: true
+            ssh_authorized_keys:
+              - {{ lab_pubkey.content | b64decode | trim }}
+        ssh_pwauth: false
+        disable_root: false
+        runcmd:
+          # Registering here means the guest play can start from a usable system.
+          - [ SUSEConnect, -r, "{{ scc_regcode }}" ]
+    - name: network-config
+      content: |
+        version: 2
+        ethernets:
+          eth0:
+            match: {name: "en*"}
+            dhcp4: false
+            addresses: [{{ vm_ip }}/{{ vm_prefix }}]
+            routes:
+              - to: default
+                via: {{ vm_gateway }}
+            nameservers:
+              addresses: {{ vm_dns | to_json }}
+  loop_control: {label: "{{ item.name }}"}
+  no_log: true          # user-data carries the SCC code
+
+- name: Pack the seed ISO
+  ansible.builtin.command: >-
+    genisoimage -output {{ vm_disk_path }}/{{ vm_name }}-seed.iso
+    -volid cidata -joliet -rock
+    /tmp/seed-{{ vm_name }}/user-data
+    /tmp/seed-{{ vm_name }}/meta-data
+    /tmp/seed-{{ vm_name }}/network-config
+  args: {creates: "{{ vm_disk_path }}/{{ vm_name }}-seed.iso"}
+
+- name: Remove the staged seed files
+  ansible.builtin.file:
+    path: "/tmp/seed-{{ vm_name }}"
+    state: absent
+
+# ── Define and start the domain ──────────────────────────────────────────
+- name: Check whether the domain already exists
+  ansible.builtin.command: virsh dominfo {{ vm_name }}
+  register: dominfo
+  failed_when: false
+  changed_when: false
+
+- name: Create the VM
+  ansible.builtin.command: >-
+    virt-install
+    --name {{ vm_name }}
+    --vcpus {{ vm_vcpus }}
+    --memory {{ vm_memory_mb }}
+    --cpu host-passthrough
+    --machine q35
+    --boot uefi
+    --disk path={{ vm_disk_path }}/{{ vm_name }}.qcow2,format=qcow2,bus=virtio
+    --disk path={{ vm_disk_path }}/{{ vm_name }}-seed.iso,device=cdrom
+    --network bridge={{ vm_bridge }},model=virtio
+    {% for id in gpu_pci_ids %}--hostdev {{ id }},address.type=pci {% endfor %}
+    --graphics none
+    --console pty,target_type=serial
+    --osinfo detect=on,name=sle15
+    --import
+    --noautoconsole
+  when: dominfo.rc != 0
+  changed_when: true
+
+- name: Autostart the domain
+  ansible.builtin.command: virsh autostart {{ vm_name }}
+  changed_when: false
+
+- name: Wait for SSH on the static address
+  ansible.builtin.wait_for:
+    host: "{{ vm_ip }}"
+    port: 22
+    timeout: 600
+    delay: 20
+  delegate_to: localhost
+  become: false
