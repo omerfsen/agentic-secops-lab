@@ -38,7 +38,10 @@ sles_image_url: ""           # e.g. https://.../SLES16.0-Minimal-VM.x86_64.qcow2
 sles_image_checksum: ""      # sha256:...
 
 # ── Credentials — do not commit ──────────────────────────────────────────
-scc_regcode: ""              # SUSE Customer Center registration code
+# SUSE Customer Center registration code. A 60-day trial code is issued on
+# registration at https://www.suse.com/download/sles/ — no subscription needed
+# to build this. The clock starts at registration, not at first boot.
+scc_regcode: ""
 ssh_public_key: "{{ lookup('file', '~/.ssh/id_ed25519.pub') }}"
 
 # ── Versions ─────────────────────────────────────────────────────────────

@@ -18,6 +18,26 @@ Source: <https://www.suse.com/suse-rke2/support-matrix/all-supported-versions/rk
 The one non-SUSE runtime, OpenShell, lists only Debian/Ubuntu as supported hosts — so
 run its gateway on RKE2 via the Helm chart rather than the bare-host path.
 
+## Getting SLES without a subscription
+
+SUSE offers a **60-day trial**. Register at <https://www.suse.com/download/sles/>,
+tick the option asking for a registration code, and one is issued against your
+email address. That code activates updates through SUSE Customer Center, which is
+exactly what `scc_regcode` in `ansible/group_vars/all.yml` wants.
+
+SLES 16.0 is listed among the available releases. The download links themselves are
+behind an SCC login, so the qcow2 URL is something you paste into your own vars file
+rather than something this repo can ship.
+
+Two consequences worth planning around:
+
+- **The clock starts at registration**, not at first boot. Register when you are
+  ready to build, not while reading.
+- **After 60 days the repositories stop**, so `zypper` can no longer install or
+  patch. The running system keeps working; you just cannot change it. If the lab
+  is going to outlive the trial, budget for a subscription or rebuild on
+  openSUSE Leap, accepting that it is no longer the validated combination.
+
 ## Which SLES
 
 **Use SLES 16.0.** It is validated by the current RKE2 matrix, and its 6.12 kernel has

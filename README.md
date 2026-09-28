@@ -32,7 +32,9 @@ Three specific limits worth knowing before you start:
 | **The SecOps agents aren't public** | they ship as SUSE AI Factory blueprints; no public repo |
 | **Nemotron 3 Ultra doesn't fit** | swap in Lightning or Nano for the planner role |
 
-Host is Ubuntu 24.04 LTS, guest is SLES 16.0 — only the guest has to be SUSE.
+Host is Ubuntu 24.04 LTS, guest is SLES 16.0 — only the guest has to be SUSE, and
+a [60-day trial](docs/sles-kvm.md#getting-sles-without-a-subscription) is enough to
+build the whole thing.
 
 ## Why it's still worth doing
 
