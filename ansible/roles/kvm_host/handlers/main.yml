@@ -1,4 +1,6 @@
 ---
+# Debian and SUSE rebuild the initrd differently; both are needed because the
+# vfio binding has to happen before any GPU driver loads.
 - name: rebuild initrd
-  ansible.builtin.command: dracut -f --regenerate-all
+  ansible.builtin.command: "{{ initrd_rebuild_cmd }}"
   changed_when: true

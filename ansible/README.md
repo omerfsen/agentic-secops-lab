@@ -5,8 +5,12 @@ different ways of going wrong.
 
 | | runs on | does |
 |---|---|---|
-| `host.yml` | the KVM host | verifies GPU passthrough is possible, binds vfio-pci, creates the VM |
-| `guest.yml` | the VM | SCC registration, NVIDIA driver, Landlock check, single-node RKE2 |
+| `host.yml` | the KVM host — **Ubuntu 24.04 LTS or SLES** | verifies GPU passthrough is possible, binds vfio-pci, creates the VM |
+| `guest.yml` | the VM — **SLES** | SCC registration, NVIDIA driver, Landlock check, single-node RKE2 |
+
+Only the guest has to be SLES. The host role detects the OS and picks the right
+package manager, initrd tool and bootloader command, so an Ubuntu workstation
+with the GPU in it is a normal setup.
 
 ## Not tested
 

@@ -7,15 +7,22 @@
   ansible.builtin.include_tasks: vendor_ids.yml
 
 - name: Install virtualisation packages
-  community.general.zypper:
-    name: [libvirt, qemu-kvm, virt-install, libvirt-client, guestfs-tools, cdrtools]
+  ansible.builtin.package:
+    name: "{{ kvm_host_packages }}"
     state: present
 
-- name: Ensure libvirtd is running
+- name: Ensure libvirt is running
   ansible.builtin.systemd:
-    name: libvirtd
+    name: "{{ libvirt_service }}"
     state: started
     enabled: true
+
+- name: Add the invoking user to the libvirt group
+  ansible.builtin.user:
+    name: "{{ ansible_env.SUDO_USER | default(ansible_user_id) }}"
+    groups: "{{ libvirt_group }}"
+    append: true
+  when: ansible_env.SUDO_USER is defined
 
 # ── IOMMU ────────────────────────────────────────────────────────────────
 - name: Check IOMMU is enabled
@@ -28,9 +35,12 @@
   ansible.builtin.assert:
     that: iommu_groups.matched > 0
     fail_msg: >-
-      No IOMMU groups found. Add intel_iommu=on iommu=pt (or amd_iommu=on) to the
-      kernel command line, regenerate grub, and reboot. Without IOMMU the GPU
-      cannot be passed through at all.
+      No IOMMU groups found — the GPU cannot be passed through at all.
+      On Ubuntu: add intel_iommu=on iommu=pt (or amd_iommu=on for AMD) to
+      GRUB_CMDLINE_LINUX_DEFAULT in /etc/default/grub, run update-grub, reboot.
+      On SLES: same parameters, then grub2-mkconfig -o /boot/grub2/grub.cfg.
+      This play does not edit your bootloader — getting that wrong costs you the
+      machine.
 
 # ── The GPU's IOMMU group must contain nothing else ───────────────────────
 - name: Resolve the IOMMU group of each requested device

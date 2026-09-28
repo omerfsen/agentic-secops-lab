@@ -3,7 +3,9 @@
 # ── VM shape ─────────────────────────────────────────────────────────────
 vm_name: secops-lab
 vm_vcpus: 16
-vm_memory_mb: 65536          # 128 GB if you plan to offload MoE experts
+# Leave the host 16-32 GB. On a 96 GB host, 65536 (64 GB) is a good split and
+# is also what MoE expert offload wants — see docs/gpu-sizing.md.
+vm_memory_mb: 65536
 vm_disk_gb: 500
 vm_disk_path: /var/lib/libvirt/images
 
@@ -22,6 +24,10 @@ vm_hostname: secops-lab
 gpu_pci_ids:
   - "0000:01:00.0"
   - "0000:01:00.1"
+
+# ── KVM host ─────────────────────────────────────────────────────────────
+# The host OS is detected automatically; Ubuntu 24.04 LTS and SLES are both
+# handled. Only the guest has to be SLES.
 
 # ── SLES image ───────────────────────────────────────────────────────────
 # A SLES qcow2 cloud image. 16.0 preferred: its 6.12 kernel has the Landlock

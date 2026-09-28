@@ -27,8 +27,18 @@ healthy and isn't one.
 
 ## KVM host
 
+The host does **not** have to be SLES — only the guest does. Ubuntu 24.04 LTS is a
+perfectly good host, and is what this was worked out on. The differences are
+mechanical:
+
+| | Ubuntu 24.04 | SLES |
+|---|---|---|
+| packages | `qemu-kvm libvirt-daemon-system virtinst ovmf genisoimage` | `libvirt qemu-kvm virt-install cdrtools` |
+| initrd | `update-initramfs -u -k all` | `dracut -f --regenerate-all` |
+| bootloader | `update-grub` | `grub2-mkconfig -o /boot/grub2/grub.cfg` |
+
 ```bash
-# kernel cmdline
+# kernel cmdline, either host
 intel_iommu=on iommu=pt       # or: amd_iommu=on
 ```
 
@@ -79,6 +89,13 @@ If the card is a GeForce rather than a datacentre part:
 SUSE's G07 driver covers Turing and newer, so a GeForce card is fine as far as the
 driver is concerned. Licensing is the constraint, not support: see
 [gpu-sizing.md](gpu-sizing.md#nim-licensing).
+
+## Host memory
+
+A 96 GB host splits comfortably as 64 GB guest / 32 GB host. The guest wants the
+larger share because MoE expert offload spills into system RAM — see
+[gpu-sizing.md](gpu-sizing.md). Below about 48 GB in the guest, offload stops being
+a viable route and you are choosing between a 9B model in VRAM or nothing.
 
 ## Caveat
 
