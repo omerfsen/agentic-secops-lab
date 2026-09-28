@@ -1,17 +1,32 @@
 # SLES on KVM
 
-For the SUSE half this is a supported base: RKE2 v1.34's support matrix lists SLES
-16.0 and 15 SP5–SP7 plus SL Micro 6.x, and SUSE's AI deployment guide treats a GPU
+For the SUSE half this is a supported base. SUSE's RKE2 v1.36 support matrix
+validates:
+
+| | validated |
+|---|---|
+| SLES | **16.0**, 15 SP7, 15 SP6 |
+| SL Micro | 6.2, 6.1, 6.0 |
+| arch | x86_64 and arm64 |
+
+(15 SP5 appeared in older matrices and has since dropped off — check the matrix
+for the RKE2 version you actually install.) SUSE's AI deployment guide treats a GPU
 fully passed through to a SLES VM as a normal topology.
+
+Source: <https://www.suse.com/suse-rke2/support-matrix/all-supported-versions/rke2-v1-36>
 
 The one non-SUSE runtime, OpenShell, lists only Debian/Ubuntu as supported hosts — so
 run its gateway on RKE2 via the Helm chart rather than the bare-host path.
 
 ## Which SLES
 
-**Prefer SLES 16.0.** Its 6.12 kernel has the Landlock network rules and scoping that
-landed after the 6.4 kernel in 15 SP6/SP7. SUSE's own guide (written for SUSE AI 1.0)
-recommends 15 SP6 or SL Micro 6.1, which still work — you just get weaker Landlock.
+**Use SLES 16.0.** It is validated by the current RKE2 matrix, and its 6.12 kernel has
+the Landlock network rules and scoping that came after the 6.4 kernel in 15 SP6/SP7.
+Since the whole point of this stack is that the sandbox — not the agent — holds the
+boundary, taking the weaker Landlock is a poor trade.
+
+15 SP6 and SP7 remain validated and will work; SUSE's own AI guide (written for
+SUSE AI 1.0) recommends 15 SP6 or SL Micro 6.1. You just get less from Landlock.
 
 **Verify Landlock is actually enabled**, because the failure is silent:
 

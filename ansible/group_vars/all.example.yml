@@ -30,8 +30,10 @@ gpu_pci_ids:
 # handled. Only the guest has to be SLES.
 
 # ── SLES image ───────────────────────────────────────────────────────────
-# A SLES qcow2 cloud image. 16.0 preferred: its 6.12 kernel has the Landlock
-# network rules that 15 SP6/SP7 (6.4) lack.
+# A SLES qcow2 cloud image. Validated by RKE2 v1.36: SLES 16.0, 15 SP7, 15 SP6.
+# Use 16.0 — its 6.12 kernel has the Landlock network rules that 15 SP6/SP7 (6.4)
+# lack, and Landlock is what the sandbox relies on.
+# Download from SUSE Customer Center with your subscription.
 sles_image_url: ""           # e.g. https://.../SLES16.0-Minimal-VM.x86_64.qcow2
 sles_image_checksum: ""      # sha256:...
 
