@@ -1,12 +1,13 @@
 # Ansible
 
-Two playbooks, because this is two machines with different credentials and
-different ways of going wrong.
+Three playbooks, because this is two machines with different credentials and
+different ways of going wrong, plus a stack on top.
 
 | | runs on | does |
 |---|---|---|
 | `host.yml` | the KVM host — **Ubuntu 24.04 LTS or SLES** | verifies GPU passthrough is possible, binds vfio-pci, creates the VM |
 | `guest.yml` | the VM — **SLES** | SCC registration, NVIDIA driver, Landlock check, single-node RKE2 |
+| `stack.yml` | the VM | GPU Operator, NeuVector, vLLM, OpenShell — each behind a switch |
 
 Only the guest has to be SLES. The host role detects the OS and picks the right
 package manager, initrd tool and bootloader command, so an Ubuntu workstation
