@@ -1,7 +1,7 @@
 ---
 # SUSE Security (NeuVector) from its upstream chart. Single-node sizing: one
-# controller, one scanner. The manager is exposed on a NodePort for the lab —
-# first login is admin/admin, change it.
+# controller, one scanner. The chart generates the admin bootstrap password
+# into the neuvector-bootstrap-secret; change it after the first login.
 
 - name: Add the NeuVector Helm repo
   ansible.builtin.command: helm repo add neuvector https://neuvector.github.io/neuvector-helm/ --force-update
@@ -101,4 +101,8 @@
   ansible.builtin.debug:
     msg: >-
       NeuVector up. Manager: https://{{ neuvector_ingress_host }}/
-      (also http://{{ ansible_host }}:{{ neuvector_manager_nodeport }}). First login admin/admin — change it.
+      (also http://{{ ansible_host }}:{{ neuvector_manager_nodeport }}). User admin; the chart
+      generated the initial password — read it on the guest with
+      kubectl -n neuvector get secret neuvector-bootstrap-secret
+      -o go-template='{{ '{{' }} .data.bootstrapPassword | base64decode {{ '}}' }}' and change it after
+      the first login.

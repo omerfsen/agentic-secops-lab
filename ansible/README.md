@@ -195,8 +195,10 @@ SLES 16:
   `http://vllm.vllm.svc:8000/v1`), model name `nemotron-nano-9b`. Nemotron
   Nano reasons before it answers by default; pass
   `"chat_template_kwargs": {"enable_thinking": false}` for a plain reply.
-- **NeuVector** — `https://neuvector.<guest-ip>.sslip.io/`, admin/admin at
-  first login.
+- **NeuVector** — `https://neuvector.<guest-ip>.sslip.io/`, user `admin`.
+  The chart generates the initial password; on the guest:
+  `kubectl -n neuvector get secret neuvector-bootstrap-secret -o go-template='{{ .data.bootstrapPassword | base64decode }}'`.
+  Change it after the first login.
 - **OpenShell** — on the guest as the login user: `openshell status`,
   `openshell sandbox list`, `openshell sandbox create --name x --from <image>
   -- <command>`. A port-forward to the gateway runs as a systemd service and
