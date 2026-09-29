@@ -157,6 +157,30 @@ export KUBECONFIG=$PWD/secops-lab.kubeconfig
 kubectl get nodes
 ```
 
+## The stack (`stack.yml`)
+
+Part 3, once `guest.yml` has left a working RKE2: the public pieces of the
+stack, one role each, each behind its own switch in `group_vars`.
+
+| role | what it does | switch |
+|---|---|---|
+| `k8s_tools` | helm (SLES ships it), default StorageClass | always |
+| `gpu_operator` | NVIDIA container toolkit on the node, GPU Operator with the driver and toolkit left host-managed, a CUDA job that proves a pod sees the card | `install_gpu_operator` |
+| `neuvector` | SUSE Security from the upstream chart, single-node sizing | `install_neuvector` |
+
+Two things the GPU role does that aren't in NVIDIA's docs, both learned on
+SLES 16:
+
+- SUSE's toolkit package sets `nvidia-container-cli` to run as `root:video`,
+  and NVML then refuses with "insufficient permissions" even for root. The
+  role switches it to `root:root`; the runtime re-reads the file per container.
+- While that was broken, the first container start didn't fail — it wedged
+  the runtime shim in the kernel (`uvm_va_space_destroy`, uninterruptible),
+  every later NVML user queued behind it and the guest needed a hard reset.
+  If GPU pods ever sit in `RunContainerError` with "context deadline
+  exceeded", check for D-state `nvidia-container-runtime` processes before
+  anything else.
+
 ## Where it stops
 
 At a single-node RKE2 cluster with the GPU visible to the guest. One caveat
