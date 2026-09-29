@@ -60,11 +60,19 @@
   changed_when: true
 
 # ── cloud-init: static IP on the bridge, key installed, SCC registered ───
+# Built once: the seed only matters for the guest's first boot, and rebuilding
+# it on every run would show up as changes for nothing.
+- name: Is the seed ISO already built?
+  ansible.builtin.stat:
+    path: "{{ vm_disk_path }}/{{ vm_name }}-seed.iso"
+  register: seed_iso
+
 - name: Stage directory for the seed files
   ansible.builtin.file:
     path: "/tmp/seed-{{ vm_name }}"
     state: directory
     mode: "0700"
+  when: not seed_iso.stat.exists
 
 - name: Build cloud-init seed
   ansible.builtin.copy:
@@ -112,6 +120,7 @@
               addresses: {{ vm_dns | to_json }}
   loop_control: {label: "{{ item.name }}"}
   no_log: true          # user-data carries the SCC code
+  when: not seed_iso.stat.exists
 
 - name: Pack the seed ISO
   ansible.builtin.command: >-
@@ -126,6 +135,7 @@
   ansible.builtin.file:
     path: "/tmp/seed-{{ vm_name }}"
     state: absent
+  when: not seed_iso.stat.exists
 
 # ── Define and start the domain ──────────────────────────────────────────
 - name: Check whether the domain already exists
@@ -155,6 +165,21 @@
     --noautoconsole
   when: dominfo.rc != 0
   changed_when: true
+
+# virt-install can only create managed='yes'. In permanent mode flip it to
+# 'no' right away so libvirt never attempts a live detach of the card (see
+# roles/kvm_host/tasks/guest_hostdevs.yml). Takes effect from the next start.
+- name: Never let libvirt detach the card live (permanent mode)
+  ansible.builtin.shell: |
+    set -o pipefail
+    if virsh dumpxml --inactive {{ vm_name }} | grep -q "managed='yes'"; then
+      virsh dumpxml --inactive {{ vm_name }} | sed "s/managed='yes'/managed='no'/g" | virsh define /dev/stdin >/dev/null
+      echo changed
+    fi
+  args: {executable: /bin/bash}
+  register: hostdev_unmanaged
+  changed_when: "'changed' in hostdev_unmanaged.stdout"
+  when: gpu_passthrough_mode == 'permanent'
 
 # on-demand mode relies on libvirt binding and unbinding the card itself.
 - name: Confirm libvirt manages the hostdev binding

@@ -60,6 +60,12 @@
     content: |
       options vfio-pci disable_vga=1
 
+# This mode is the one that relies on libvirt moving the card itself.
+- name: Let libvirt manage the hostdev binding
+  ansible.builtin.include_tasks: guest_hostdevs.yml
+  vars:
+    hostdev_managed: "yes"
+
 - name: Install what the hook needs
   ansible.builtin.package:
     name: psmisc

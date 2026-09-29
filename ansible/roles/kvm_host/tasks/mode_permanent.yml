@@ -3,6 +3,11 @@
 # modprobe config baked into the initrd, so one reboot is needed after the
 # first run — the gate at the bottom stops the play until that has happened.
 
+- name: Keep libvirt from ever detaching the card live
+  ansible.builtin.include_tasks: guest_hostdevs.yml
+  vars:
+    hostdev_managed: "no"
+
 - name: Remove the on-demand hook and its module option, if present
   ansible.builtin.file:
     path: "{{ item }}"

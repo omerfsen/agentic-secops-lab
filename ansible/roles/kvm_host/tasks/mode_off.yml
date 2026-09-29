@@ -5,6 +5,18 @@
 - name: Drop the permanent-mode config
   ansible.builtin.include_tasks: permanent_absent.yml
 
+# The guest must not come up while the host owns the card: no autostart, and
+# hostdevs libvirt would never try to detach live.
+- name: Keep libvirt from detaching the card live
+  ansible.builtin.include_tasks: guest_hostdevs.yml
+  vars:
+    hostdev_managed: "no"
+
+- name: Disable the guest's autostart while the host owns the card
+  ansible.builtin.command: virsh autostart --disable {{ vm_name }}
+  when: guest_dominfo.rc == 0
+  changed_when: false
+
 - name: Remove the on-demand hook and its module option too, if present
   ansible.builtin.file:
     path: "{{ item }}"
