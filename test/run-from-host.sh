@@ -1,0 +1,21 @@
+#!/bin/bash
+# Run the claim tests from the KVM host: copies test/ to the guest over the
+# lab's SSH key and runs run.sh there as the login user. Pass NV_PASSWORD in
+# the environment to enable the NeuVector test.
+set -eu
+here="$(cd "$(dirname "$0")" && pwd)"
+repo="$(cd "$here/.." && pwd)"
+inv="$repo/ansible/inventory.ini"
+host=$(awk '/^\[sles_guest\]/{f=1;next} f && /ansible_host=/{for(i=1;i<=NF;i++) if($i ~ /^ansible_host=/) {sub("ansible_host=","",$i); print $i; exit}}' "$inv")
+user=$(awk '/^\[sles_guest\]/{f=1;next} f && /ansible_user=/{for(i=1;i<=NF;i++) if($i ~ /^ansible_user=/) {sub("ansible_user=","",$i); print $i; exit}}' "$inv")
+key="$repo/ansible/.keys/$(ls "$repo/ansible/.keys" | grep -E '_ed25519$' | head -1)"
+ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i "$key")
+
+echo "== copying test/ to $user@$host"
+ssh "${ssh_opts[@]}" "$user@$host" 'mkdir -p ~/claimtest'
+scp -q "${ssh_opts[@]}" "$here"/*.sh "$here"/*.yaml "$here"/README.md "$user@$host:~/claimtest/"
+echo "== running"
+ssh -t "${ssh_opts[@]}" "$user@$host" "NV_PASSWORD='${NV_PASSWORD:-}' bash ~/claimtest/run.sh"
+echo "== fetching results.md"
+scp -q "${ssh_opts[@]}" "$user@$host:~/claimtest/results.md" "$here/results.md"
+echo "saved to $here/results.md"

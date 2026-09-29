@@ -1,0 +1,25 @@
+# Provider profile used only by t05. Same shape as the upstream examples in
+# github.com/NVIDIA/OpenShell/providers/, pointed at an in-cluster echo service
+# so the test can see what actually left the sandbox. Delete after the run:
+#   openshell provider profile delete claimtest-echo
+id: claimtest-echo
+display_name: claimtest echo
+description: in-cluster echo service standing in for a credentialed API
+category: inference
+inference_capable: false
+credentials:
+  - name: api_key
+    description: fake API key, never meant to be seen inside the sandbox
+    env_vars: [ECHO_API_KEY]
+    required: true
+    auth_style: bearer
+    header_name: authorization
+discovery:
+  credentials: [api_key]
+endpoints:
+  - host: echo.claimtest.svc.cluster.local
+    port: 8080
+    protocol: rest
+    access: read-write
+    enforcement: enforce
+binaries: [/usr/bin/curl, /usr/local/bin/curl]
