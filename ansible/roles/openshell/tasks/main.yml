@@ -1,0 +1,150 @@
+---
+# NVIDIA OpenShell gateway on the existing cluster, per
+# docs.nvidia.com/openshell/latest/kubernetes/setup: Agent Sandbox CRDs first,
+# then the OCI chart. Canal enforces NetworkPolicy, which the gateway relies
+# on to keep sandboxes from bypassing its egress policy.
+
+- name: Install the Agent Sandbox controller and CRDs
+  ansible.builtin.command: kubectl apply -f {{ openshell_agent_sandbox_manifest }}
+  register: agent_sandbox
+  changed_when: "'created' in agent_sandbox.stdout or 'configured' in agent_sandbox.stdout"
+
+- name: Wait for the Agent Sandbox controller
+  ansible.builtin.shell: |
+    set -o pipefail
+    kubectl get pods -A --no-headers | grep -iE "agent-sandbox|sandbox-controller" | awk '{print $4}' | grep -vc Running || true
+  args: {executable: /bin/bash}
+  register: sandbox_pending
+  until: sandbox_pending.stdout | trim == '0'
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Write the OpenShell values
+  ansible.builtin.copy:
+    dest: /etc/secops-lab/openshell-values.yaml
+    mode: "0644"
+    content: |
+      # chart version: {{ openshell_chart_version }}
+      replicaCount: 1
+      workload:
+        kind: statefulset      # SQLite; a second replica would need PostgreSQL
+      server:
+        auth:
+          allowUnauthenticatedUsers: {{ openshell_allow_unauthenticated_users | bool | lower }}
+  register: openshell_values
+
+- name: Is the OpenShell release deployed?
+  ansible.builtin.shell: |
+    set -o pipefail
+    helm status openshell -n {{ openshell_namespace }} -o json | grep -c '"status":"deployed"'
+  args: {executable: /bin/bash}
+  register: openshell_release
+  changed_when: false
+  failed_when: false
+
+- name: Install or upgrade OpenShell
+  ansible.builtin.command: >-
+    helm upgrade --install openshell oci://ghcr.io/nvidia/openshell/helm-chart
+    --version {{ openshell_chart_version }}
+    -n {{ openshell_namespace }} --create-namespace
+    -f /etc/secops-lab/openshell-values.yaml
+    --wait --timeout 15m
+  when: openshell_values.changed or openshell_release.stdout | trim != '1'
+  changed_when: true
+
+- name: Wait for the gateway pod
+  ansible.builtin.shell: |
+    set -o pipefail
+    kubectl get pods -n {{ openshell_namespace }} --no-headers | awk '{print $3}' | grep -vcE "^Running$|^Completed$" || true
+  args: {executable: /bin/bash}
+  register: openshell_pending
+  until: openshell_pending.stdout | trim == '0'
+  retries: 40
+  delay: 15
+  changed_when: false
+
+# ── CLI on the guest, registered against this gateway ────────────────────
+- name: Install the openshell CLI
+  ansible.builtin.shell: |
+    set -o pipefail
+    curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh | sh
+  args:
+    executable: /bin/bash
+    creates: /usr/bin/openshell    # the installer uses sudo and lands there
+  become: false
+  when: openshell_install_cli | bool
+
+# The whole mTLS bundle — CA, client cert, client key — lives in one secret.
+# Extracting only the CA leaves the CLI to mint its own client pair, and the
+# gateway's server cert then fails verification ("BadSignature").
+- name: Install the gateway's mTLS bundle for the CLI
+  ansible.builtin.shell: |
+    set -o pipefail
+    d=/home/{{ ansible_user }}/.config/openshell/gateways/k8s/mtls
+    mkdir -p "$d"
+    for k in ca.crt tls.crt tls.key; do
+      kubectl -n {{ openshell_namespace }} get secret openshell-client-tls -o jsonpath="{.data.${k/./\\.}}" | base64 -d > "$d/$k"
+    done
+    chmod 600 "$d/tls.key"
+    chown -R {{ ansible_user }}: /home/{{ ansible_user }}/.config/openshell
+  args: {executable: /bin/bash}
+  changed_when: false
+  when: openshell_install_cli | bool
+
+# The server cert's SANs cover localhost/127.0.0.1, so the documented
+# port-forward is the supported way in; keep one running as a service.
+- name: Keep a port-forward to the gateway running
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/openshell-portforward.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=kubectl port-forward to the OpenShell gateway (127.0.0.1:8080)
+      After=rke2-server.service
+      Requires=rke2-server.service
+
+      [Service]
+      Environment=KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+      # /usr/local/bin copy: systemd cannot exec RKE2's own binary under SELinux
+      ExecStart=/usr/local/bin/kubectl -n {{ openshell_namespace }} port-forward svc/openshell 8080:8080
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+  register: pf_unit
+  when: openshell_install_cli | bool
+
+- name: Start the port-forward service
+  ansible.builtin.systemd:
+    name: openshell-portforward
+    state: "{{ 'restarted' if pf_unit.changed else 'started' }}"
+    enabled: true
+    daemon_reload: true
+  when: openshell_install_cli | bool
+
+- name: Register the gateway with the login user's CLI
+  ansible.builtin.shell: |
+    set -o pipefail
+    export PATH="$HOME/.local/bin:$PATH"
+    if ! openshell gateway list 2>/dev/null | grep -qE '^\s*\*?\s*k8s\s'; then
+      sleep 3
+      openshell gateway add https://127.0.0.1:8080 --local --name k8s
+      echo registered
+    fi
+    # the installer registers a default gateway on another port; make ours current
+    openshell gateway list 2>/dev/null | grep -qE '^\s*\*\s*k8s\s' || { openshell gateway select k8s; echo selected; }
+  args: {executable: /bin/bash}
+  become: false
+  register: gw_add
+  changed_when: "'registered' in gw_add.stdout or 'selected' in gw_add.stdout"
+  when: openshell_install_cli | bool
+
+- name: Report
+  ansible.builtin.debug:
+    msg: >-
+      OpenShell gateway up in namespace {{ openshell_namespace }}; the CLI on the guest is
+      registered as "k8s" via a persistent port-forward — `openshell status`, `openshell sandbox list`.
+      {{ 'User auth is DISABLED (openshell_allow_unauthenticated_users) — lab only; configure OIDC before exposing this.'
+         if openshell_allow_unauthenticated_users | bool else '' }}

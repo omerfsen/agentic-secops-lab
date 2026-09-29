@@ -1,0 +1,15 @@
+---
+# OpenShell is alpha ("one developer, one gateway"). Pin the chart so a
+# re-run doesn't silently move to whatever ghcr.io serves next.
+openshell_chart_version: "0.1.2"
+openshell_namespace: openshell
+# The Agent Sandbox controller and CRDs the gateway needs, from kubernetes-sigs.
+openshell_agent_sandbox_manifest: https://github.com/kubernetes-sigs/agent-sandbox/releases/latest/download/sandbox.yaml
+# Also install the openshell CLI on the guest and register the gateway for
+# the login user, so `openshell status` works right after the play.
+openshell_install_cli: true
+# Kubernetes gateways authenticate users with OIDC; the mTLS bundle is only
+# transport. With no identity provider in the lab, the chart's documented
+# "trusted local development" escape hatch is the only way the CLI can talk
+# to the gateway at all. UNSAFE beyond a lab: set false and configure OIDC.
+openshell_allow_unauthenticated_users: true
