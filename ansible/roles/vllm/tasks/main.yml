@@ -1,0 +1,137 @@
+---
+# Model serving: vLLM with an OpenAI-compatible API, one GPU, the model cache
+# on a PVC so a restart doesn't re-download 9 GB. Reached in-cluster at
+# http://vllm.vllm.svc:8000 and from outside behind Traefik at the prefix.
+
+- name: Hugging Face token secret
+  ansible.builtin.shell: |
+    set -o pipefail
+    kubectl create namespace vllm --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    kubectl -n vllm create secret generic hf-token --from-literal=token='{{ vllm_hf_token }}' \
+      --dry-run=client -o yaml | kubectl apply -f -
+  args: {executable: /bin/bash}
+  register: hf_secret
+  changed_when: "'created' in hf_secret.stdout or 'configured' in hf_secret.stdout"
+  no_log: true
+
+- name: Write the vLLM manifests
+  ansible.builtin.copy:
+    dest: /etc/secops-lab/vllm.yaml
+    mode: "0644"
+    content: |
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata: {name: hf-cache, namespace: vllm}
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: {requests: {storage: {{ vllm_cache_size }}}}
+      ---
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: vllm, namespace: vllm}
+      spec:
+        replicas: 1
+        strategy: {type: Recreate}
+        # first start pulls ~19 GB; the default 10 min would call that a failure
+        progressDeadlineSeconds: 3600
+        selector: {matchLabels: {app: vllm}}
+        template:
+          metadata: {labels: {app: vllm}}
+          spec:
+            runtimeClassName: nvidia
+            # Kubernetes would inject VLLM_PORT=tcp://<svc-ip>:8000 for the
+            # Service called "vllm", and vLLM reads VLLM_PORT as its own config.
+            enableServiceLinks: false
+            containers:
+              - name: vllm
+                image: {{ vllm_image }}
+                args:
+                  - --model={{ vllm_model }}
+                  - --served-model-name={{ vllm_served_name }}
+                  - --max-model-len={{ vllm_max_model_len }}
+                  - --max-num-batched-tokens={{ vllm_max_num_batched_tokens }}
+                  - --max-num-seqs={{ vllm_max_num_seqs }}
+                  - --gpu-memory-utilization={{ vllm_gpu_memory_utilization }}
+                  - --port=8000
+                env:
+                  - {name: HF_HOME, value: /cache}
+                  - name: HF_TOKEN
+                    valueFrom: {secretKeyRef: {name: hf-token, key: token, optional: true}}
+                ports: [{containerPort: 8000}]
+                resources:
+                  limits: {nvidia.com/gpu: 1}
+                volumeMounts:
+                  - {name: cache, mountPath: /cache}
+                  - {name: shm, mountPath: /dev/shm}
+                readinessProbe:
+                  httpGet: {path: /health, port: 8000}
+                  initialDelaySeconds: 60
+                  periodSeconds: 15
+                  failureThreshold: 120
+            volumes:
+              - name: cache
+                persistentVolumeClaim: {claimName: hf-cache}
+              - name: shm
+                emptyDir: {medium: Memory, sizeLimit: 4Gi}
+      ---
+      apiVersion: v1
+      kind: Service
+      metadata: {name: vllm, namespace: vllm}
+      spec:
+        selector: {app: vllm}
+        ports: [{port: 8000, targetPort: 8000}]
+      ---
+      apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata: {name: vllm-strip, namespace: vllm}
+      spec:
+        stripPrefix: {prefixes: ["{{ vllm_ingress_path }}"]}
+      ---
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: vllm
+        namespace: vllm
+        annotations:
+          traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+          traefik.ingress.kubernetes.io/router.middlewares: vllm-vllm-strip@kubernetescrd
+      spec:
+        ingressClassName: traefik
+        rules:
+          - http:
+              paths:
+                - path: {{ vllm_ingress_path }}
+                  pathType: Prefix
+                  backend: {service: {name: vllm, port: {number: 8000}}}
+  register: vllm_manifest
+
+- name: Apply them
+  ansible.builtin.command: kubectl apply -f /etc/secops-lab/vllm.yaml
+  register: vllm_apply
+  changed_when: "'created' in vllm_apply.stdout or 'configured' in vllm_apply.stdout"
+
+# First start pulls a ~10 GB image and a ~9 GB model.
+- name: Wait for vLLM to be ready
+  ansible.builtin.command: kubectl -n vllm rollout status deployment/vllm --timeout=1800s
+  changed_when: false
+
+- name: Ask it for a completion
+  ansible.builtin.uri:
+    url: "http://{{ ansible_host }}{{ vllm_ingress_path }}/v1/chat/completions"
+    method: POST
+    body_format: json
+    body:
+      model: "{{ vllm_served_name }}"
+      messages: [{role: user, content: "Reply with the single word: ready"}]
+      max_tokens: 8
+    return_content: true
+  register: vllm_probe
+  delegate_to: localhost
+  become: false
+
+- name: Report
+  ansible.builtin.debug:
+    msg: >-
+      vLLM serving {{ vllm_model }} as "{{ vllm_served_name }}" —
+      http://{{ ansible_host }}{{ vllm_ingress_path }}/v1 (OpenAI API), in-cluster
+      http://vllm.vllm.svc:8000/v1. Test reply: {{ vllm_probe.json.choices[0].message.content | trim }}

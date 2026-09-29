@@ -1,3 +1,8 @@
 ---
 neuvector_chart_version: ""     # empty = whatever the NeuVector Helm repo serves
 neuvector_manager_nodeport: 30443
+# The manager UI redirects to an absolute /index.html, so it cannot live under
+# a path prefix; it gets a hostname instead. sslip.io resolves any
+# <name>.<ip>.sslip.io to <ip> without DNS setup — override if your resolver
+# blocks it or you have real DNS.
+neuvector_ingress_host: "neuvector.{{ ansible_host }}.sslip.io"

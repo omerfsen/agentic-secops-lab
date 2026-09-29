@@ -21,6 +21,10 @@
         scanner:
           replicas: 1
       manager:
+        # Plain HTTP on the manager; Traefik terminates TLS in front of it
+        # (the documented way to put the UI behind an ingress).
+        env:
+          ssl: false
         svc:
           type: NodePort
           nodePort: {{ neuvector_manager_nodeport }}
@@ -59,8 +63,42 @@
   delay: 15
   changed_when: false
 
+# The UI through RKE2's Traefik, by hostname (see defaults for why not a path).
+- name: Write the manager ingress
+  ansible.builtin.copy:
+    dest: /etc/secops-lab/neuvector-ingress.yaml
+    mode: "0644"
+    content: |
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: neuvector-manager
+        namespace: neuvector
+        annotations:
+          traefik.ingress.kubernetes.io/router.entrypoints: websecure
+      spec:
+        ingressClassName: traefik
+        rules:
+          - host: {{ neuvector_ingress_host }}
+            http:
+              paths:
+                - path: /
+                  pathType: Prefix
+                  backend: {service: {name: neuvector-service-webui, port: {number: 8443}}}
+  register: nv_ingress_file
+
+- name: Apply the manager ingress
+  ansible.builtin.command: kubectl apply -f /etc/secops-lab/neuvector-ingress.yaml
+  register: nv_ingress
+  changed_when: "'created' in nv_ingress.stdout or 'configured' in nv_ingress.stdout"
+
+- name: Drop the path-prefix middleware an earlier run may have left
+  ansible.builtin.command: kubectl delete middleware neuvector-strip -n neuvector --ignore-not-found
+  register: nv_mw
+  changed_when: "'deleted' in nv_mw.stdout"
+
 - name: Report
   ansible.builtin.debug:
     msg: >-
-      NeuVector up. Manager: https://{{ ansible_host }}:{{ neuvector_manager_nodeport }}
-      (admin/admin on first login — change it).
+      NeuVector up. Manager: https://{{ neuvector_ingress_host }}/
+      (also http://{{ ansible_host }}:{{ neuvector_manager_nodeport }}). First login admin/admin — change it.

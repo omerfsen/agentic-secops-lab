@@ -90,3 +90,5 @@ install_local_kubectl: false
 # ── stack.yml: the public pieces of the stack, one switch each ───────────
 install_gpu_operator: true     # device plugin etc.; driver and toolkit stay host-managed
 install_neuvector: true        # SUSE Security runtime scanning
+install_vllm: false            # model serving; pulls ~19 GB on first start — see roles/vllm/defaults
+install_openshell: false       # NVIDIA OpenShell gateway (alpha) + Agent Sandbox CRDs + the CLI

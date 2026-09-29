@@ -19,3 +19,7 @@
       when: install_gpu_operator | bool
     - role: neuvector
       when: install_neuvector | bool
+    - role: vllm
+      when: install_vllm | bool
+    - role: openshell
+      when: install_openshell | bool

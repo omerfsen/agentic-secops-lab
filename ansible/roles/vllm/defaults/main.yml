@@ -1,0 +1,17 @@
+---
+# A 9B in FP8 fits the 16 GB card with room for KV cache — see
+# docs/gpu-sizing.md. Ungated on Hugging Face, NVIDIA Open Model License.
+vllm_model: nvidia/NVIDIA-Nemotron-Nano-9B-v2-FP8
+vllm_served_name: nemotron-nano-9b
+vllm_image: vllm/vllm-openai:latest
+vllm_max_model_len: 8192
+vllm_gpu_memory_utilization: "0.92"
+# Nemotron Nano is a Mamba-Transformer hybrid: its SSD chunk-state buffers
+# scale with the batch, and vLLM's startup profiling at the default batch
+# OOMs a 16 GB card once the 9.7 GiB of weights are loaded. Keep the batch
+# small; this is a lab, not a serving farm.
+vllm_max_num_batched_tokens: 2048
+vllm_max_num_seqs: 8
+vllm_cache_size: 60Gi          # PVC for the Hugging Face cache (local-path)
+vllm_hf_token: ""              # only needed for gated models
+vllm_ingress_path: /vllm       # OpenAI API at https://<guest>/vllm/v1/...
