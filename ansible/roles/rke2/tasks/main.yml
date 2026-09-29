@@ -54,11 +54,26 @@
   changed_when: "'created' in local_path.stdout or 'configured' in local_path.stdout"
 
 # ── Reach the cluster without sudo, and from the control node ────────────
-- name: Put kubectl on the guest's PATH
+# A copy, not a symlink: SELinux lets a shell run binaries under
+# /var/lib/rancher but not systemd units (init_t → EXEC "Permission denied"),
+# and the port-forward service needs kubectl. /usr/local/bin gives it bin_t.
+- name: Is /usr/local/bin/kubectl a leftover symlink?
+  ansible.builtin.stat:
+    path: /usr/local/bin/kubectl
+  register: kubectl_local
+
+- name: Drop the symlink an earlier run may have made
   ansible.builtin.file:
+    path: /usr/local/bin/kubectl
+    state: absent
+  when: kubectl_local.stat.islnk | default(false)
+
+- name: Put kubectl on the guest's PATH
+  ansible.builtin.copy:
     src: /var/lib/rancher/rke2/bin/kubectl
     dest: /usr/local/bin/kubectl
-    state: link
+    remote_src: true
+    mode: "0755"
 
 - name: Give the login user a kubeconfig
   ansible.builtin.file:

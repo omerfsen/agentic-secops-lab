@@ -93,6 +93,7 @@
     --wait --timeout 20m
   environment: {KUBECONFIG: /etc/rancher/rke2/rke2.yaml}
   when: operator_values.changed or operator_release.stdout | trim != '1'
+  register: operator_install
   changed_when: true
 
 # Plain JSON rather than a jsonpath: the command module's argument parser eats
@@ -107,6 +108,8 @@
   delay: 15
   changed_when: false
 
+# Only right after the operator was (re)installed: there is one GPU, and once
+# a workload holds it this job could never schedule.
 - name: Prove a pod can see the card
   ansible.builtin.shell: |
     set -o pipefail
@@ -137,8 +140,8 @@
   environment: {KUBECONFIG: /etc/rancher/rke2/rke2.yaml}
   register: gpu_smoke
   changed_when: false
-  when: gpu_operator_validate | bool
+  when: gpu_operator_validate | bool and operator_install.changed | default(false)
 
 - name: Report
   ansible.builtin.debug:
-    msg: "Pods can use the GPU: {{ gpu_smoke.stdout | default('(validation skipped)') }}"
+    msg: "Pods can use the GPU: {{ gpu_smoke.stdout | default('(validation only runs on a fresh operator install)') }}"
