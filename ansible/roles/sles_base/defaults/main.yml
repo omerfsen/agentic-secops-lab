@@ -1,4 +1,8 @@
 ---
-sles_modules:
-  - sle-module-containers/{{ ansible_facts['distribution_version'] }}/x86_64
-  - sle-module-NVIDIA-compute/{{ ansible_facts['distribution_major_version'] }}/x86_64
+# SLES 16 has no separate modules for this: containers are in the base
+# product and the NVIDIA repos come with the product registration (disabled
+# until enabled). 15 SP6/SP7 still need the two modules.
+sles_modules: >-
+  {{ [] if ansible_facts['distribution_major_version'] | int >= 16
+     else ['sle-module-containers/' ~ ansible_facts['distribution_version'] ~ '/x86_64',
+           'sle-module-NVIDIA-compute/' ~ ansible_facts['distribution_major_version'] ~ '/x86_64'] }}

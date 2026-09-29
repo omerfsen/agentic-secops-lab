@@ -6,13 +6,52 @@
     content: |
       blacklist nouveau
       options nouveau modeset=0
-  notify: rebuild guest initrd
+  register: nouveau_blacklist
 
-- name: Install the G07 driver (Turing and newer)
+# Inline, not a handler: the reboot below comes before any handler would run.
+- name: Rebuild the guest initrd without nouveau
+  ansible.builtin.command: dracut -f --regenerate-all
+  when: nouveau_blacklist.changed
+  changed_when: true
+
+# Where the packages come from: the SUSE-signed open KMP is in the product
+# repo; the userspace (nvidia-compute-utils and friends) is in NVIDIA's
+# graphics repo. On 16 that repo arrives with the product registration,
+# disabled; on 15 it comes with the NVIDIA Compute module sles_base enables.
+# Only the graphics repo: the CUDA repo carries its own userspace versions
+# bound to a different signed KMP flavour, and with both enabled the resolver
+# falls back to the DKMS build (gcc, kernel-devel, ~50 packages).
+- name: Enable the NVIDIA graphics repo that ships with the product (SLES 16)
+  ansible.builtin.command: zypper --non-interactive mr -e NVIDIA-Graphics-Drivers
+  register: nvidia_repos
+  changed_when: "'successfully enabled' in nvidia_repos.stdout"
+  when: ansible_facts['distribution_major_version'] | int >= 16
+
+- name: Keep the CUDA repo off for the same reason (SLES 16)
+  ansible.builtin.command: zypper --non-interactive mr -d NVIDIA-GPU-Compute-Toolkit-CUDA
+  register: cuda_repo
+  changed_when: "'successfully disabled' in cuda_repo.stdout"
+  failed_when: cuda_repo.rc not in [0, 6]
+  when: ansible_facts['distribution_major_version'] | int >= 16
+
+# The signed KMP pulls in the full kernel-default; the minimal image only has
+# kernel-default-base, hence the reboot below.
+- name: Install the {{ nvidia_driver_generation }} open driver (Turing and newer)
   community.general.zypper:
-    name: [nvidia-open-driver-G06-signed-kmp-default, nvidia-compute-utils-G06]
+    name:
+      - "nvidia-open-driver-{{ nvidia_driver_generation }}-signed-kmp-default"
+      - "nvidia-compute-utils-{{ nvidia_driver_generation }}"
     state: present
+    update_cache: true
   register: driver_install
+
+# SUSE creates /dev/nvidia* as root:video 0660 — without this, nvidia-smi
+# and CUDA fail with "Insufficient Permissions" for everyone but root.
+- name: Let the login user reach the GPU
+  ansible.builtin.user:
+    name: "{{ ansible_user }}"
+    groups: video
+    append: true
 
 - name: Reboot if the driver was just installed
   ansible.builtin.reboot:

@@ -1,0 +1,7 @@
+---
+# SUSE driver generation. 16.0 ships G06 (580 series) and G07 (595) side by
+# side, both signed, both covering Turing and newer; 15 SP6/SP7 only have
+# G06. G06 is the one this repo has built and rebooted end to end; G07
+# resolves just as cleanly from the graphics repo alone (verified with a
+# dry run) and is the newer series if you prefer it on a fresh guest.
+nvidia_driver_generation: G06

@@ -1,4 +1,21 @@
 ---
+# SLES 16 runs NetworkManager; without this it manages the CNI's interfaces
+# and pod networking breaks (documented RKE2 known issue).
+- name: Keep NetworkManager off the CNI interfaces
+  ansible.builtin.copy:
+    dest: /etc/NetworkManager/conf.d/rke2-canal.conf
+    mode: "0644"
+    content: |
+      [keyfile]
+      unmanaged-devices=interface-name:cali*;interface-name:flannel*
+  register: nm_conf
+
+- name: Reload NetworkManager
+  ansible.builtin.systemd:
+    name: NetworkManager
+    state: reloaded
+  when: nm_conf.changed
+
 # tar, not rpm: the installer would otherwise pick rpm on SUSE, which needs a
 # distro-specific repo and puts the binary at /usr/bin/rke2 — so `creates`
 # below would never match and every run would reinstall.
@@ -33,10 +50,91 @@
     /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml \
       apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/master/deploy/local-path-storage.yaml
   args: {executable: /bin/bash}
-  changed_when: true
+  register: local_path
+  changed_when: "'created' in local_path.stdout or 'configured' in local_path.stdout"
+
+# ── Reach the cluster without sudo, and from the control node ────────────
+- name: Put kubectl on the guest's PATH
+  ansible.builtin.file:
+    src: /var/lib/rancher/rke2/bin/kubectl
+    dest: /usr/local/bin/kubectl
+    state: link
+
+- name: Give the login user a kubeconfig
+  ansible.builtin.file:
+    path: "/home/{{ ansible_user }}/.kube"
+    state: directory
+    owner: "{{ ansible_user }}"
+    mode: "0700"
+
+# In ~/.bashrc, not /etc/profile.d: SLES 16 login shells read
+# /usr/etc/profile.d and never look at /etc/profile.d.
+- name: Shell conveniences for the login user (k alias, completion)
+  ansible.builtin.blockinfile:
+    path: "/home/{{ ansible_user }}/.bashrc"
+    create: true
+    owner: "{{ ansible_user }}"
+    mode: "0644"
+    marker: "# {mark} kubectl (managed by the secops lab playbook)"
+    block: |
+      alias k=kubectl
+      if command -v kubectl >/dev/null 2>&1; then
+        source <(kubectl completion bash)
+        complete -o default -F __start_kubectl k
+      fi
+
+- name: Drop the profile.d variant an earlier run may have left
+  ansible.builtin.file:
+    path: /etc/profile.d/kubectl.sh
+    state: absent
+
+- name: Copy the admin kubeconfig for the login user
+  ansible.builtin.copy:
+    src: /etc/rancher/rke2/rke2.yaml
+    dest: "/home/{{ ansible_user }}/.kube/config"
+    remote_src: true
+    owner: "{{ ansible_user }}"
+    mode: "0600"
+
+# Fetched verbatim into .keys/ (so re-runs see no change), then written out
+# once more with the guest's address in place of 127.0.0.1.
+- name: Fetch the kubeconfig to the control node
+  ansible.builtin.fetch:
+    src: /etc/rancher/rke2/rke2.yaml
+    dest: "{{ ssh_key_dir | default(playbook_dir ~ '/.keys') }}/{{ inventory_hostname }}.rke2.yaml"
+    flat: true
+  when: fetch_kubeconfig | bool
+
+- name: Point it at the guest and keep it private
+  ansible.builtin.copy:
+    content: "{{ lookup('file', (ssh_key_dir | default(playbook_dir ~ '/.keys')) ~ '/' ~ inventory_hostname ~ '.rke2.yaml') | replace('https://127.0.0.1:6443', 'https://' ~ ansible_host ~ ':6443') }}"
+    dest: "{{ playbook_dir }}/{{ inventory_hostname }}.kubeconfig"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  when: fetch_kubeconfig | bool
+
+- name: Read the cluster's Kubernetes version
+  ansible.builtin.command: /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml version -o json
+  register: k8s_version_raw
+  changed_when: false
+  when: install_local_kubectl | bool
+
+- name: Install a matching kubectl on the control node
+  ansible.builtin.get_url:
+    url: "https://dl.k8s.io/release/{{ k8s_version }}/bin/linux/{{ local_kubectl_arch }}/kubectl"
+    checksum: "sha256:https://dl.k8s.io/release/{{ k8s_version }}/bin/linux/{{ local_kubectl_arch }}/kubectl.sha256"
+    dest: /usr/local/bin/kubectl
+    mode: "0755"
+  vars:
+    k8s_version: "{{ (k8s_version_raw.stdout | from_json).serverVersion.gitVersion | regex_replace('\\+.*$', '') }}"
+  delegate_to: localhost
+  become: true
+  when: install_local_kubectl | bool
 
 - name: Report cluster state
   ansible.builtin.debug:
     msg: >-
-      RKE2 up. kubeconfig at /etc/rancher/rke2/rke2.yaml on the guest —
-      it holds cluster admin credentials, so it is gitignored if you copy it out.
+      RKE2 up. kubectl works for {{ ansible_user }} on the guest;
+      {{ 'the control node has ' ~ playbook_dir ~ '/' ~ inventory_hostname ~ '.kubeconfig (gitignored, admin credentials) — export KUBECONFIG to it.'
+         if fetch_kubeconfig | bool else 'the admin kubeconfig is at /etc/rancher/rke2/rke2.yaml on the guest.' }}

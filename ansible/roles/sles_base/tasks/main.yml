@@ -11,10 +11,12 @@
       {{ 'Has the post-6.4 Landlock network rules.' if ansible_facts['kernel'] is version('6.12','>=')
          else 'Older than 6.12 — Landlock network rules and scoping are absent; SLES 16.0 is preferable.' }}
 
+# no_log: the JSON includes the registration code.
 - name: Read SCC registration status
   ansible.builtin.command: SUSEConnect --status
   register: scc_status
   changed_when: false
+  no_log: true
 
 - name: Parse it
   ansible.builtin.set_fact:
@@ -44,6 +46,32 @@
   community.general.zypper:
     name: [git, curl, jq, tar, gzip]
     state: present
+
+# ── Resolver ─────────────────────────────────────────────────────────────
+# Some home routers drop one of glibc's parallel A+AAAA queries to public
+# resolvers, and every lookup then sits through the full 5 s timeout before
+# the retry succeeds. Serialising the pair fixes it without changing resolvers.
+- name: Is NetworkManager managing the guest network?
+  ansible.builtin.command: systemctl is-active NetworkManager
+  register: nm_active
+  changed_when: false
+  failed_when: false
+
+- name: Serialise resolver queries
+  ansible.builtin.copy:
+    dest: /etc/NetworkManager/conf.d/10-dns-single-request.conf
+    mode: "0644"
+    content: |
+      [global-dns]
+      options=single-request
+  register: dns_options
+  when: nm_active.stdout == 'active'
+
+- name: Reload NetworkManager
+  ansible.builtin.systemd:
+    name: NetworkManager
+    state: reloaded
+  when: dns_options.changed | default(false)
 
 # ── Landlock ─────────────────────────────────────────────────────────────
 # OpenShell's policies default to best_effort, so a missing LSM degrades

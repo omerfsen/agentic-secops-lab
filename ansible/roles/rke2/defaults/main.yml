@@ -1,0 +1,10 @@
+---
+# Copy the admin kubeconfig to the control node as <guest>.kubeconfig next
+# to the playbooks, pointed at the guest's address. Gitignored.
+fetch_kubeconfig: true
+
+# Also put a kubectl matching the cluster on the control node itself
+# (/usr/local/bin, needs sudo there). Off by default: it touches the machine
+# you run Ansible from, not the lab.
+install_local_kubectl: false
+local_kubectl_arch: amd64
