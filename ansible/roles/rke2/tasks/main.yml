@@ -67,6 +67,13 @@
     owner: "{{ ansible_user }}"
     mode: "0700"
 
+# kubectl's completion script needs bash-completion's helpers; without the
+# package every Tab prints "_get_comp_words_by_ref: command not found".
+- name: Install bash-completion
+  community.general.zypper:
+    name: bash-completion
+    state: present
+
 # In ~/.bashrc, not /etc/profile.d: SLES 16 login shells read
 # /usr/etc/profile.d and never look at /etc/profile.d.
 - name: Shell conveniences for the login user (k alias, completion)
@@ -78,7 +85,8 @@
     marker: "# {mark} kubectl (managed by the secops lab playbook)"
     block: |
       alias k=kubectl
-      if command -v kubectl >/dev/null 2>&1; then
+      if [ -r /usr/share/bash-completion/bash_completion ] && command -v kubectl >/dev/null 2>&1; then
+        source /usr/share/bash-completion/bash_completion
         source <(kubectl completion bash)
         complete -o default -F __start_kubectl k
       fi
