@@ -36,7 +36,6 @@ Thumbs.db
 # The vault password itself lives outside the repo at ~/.secops-lab-vault-pass,
 # not here — see ansible/README.md#secrets.
 ansible/inventory.ini
-ansible/group_vars/all.yml
-ansible/group_vars/vault.yml
+ansible/group_vars/all/
 ansible/.keys/
 *.retry

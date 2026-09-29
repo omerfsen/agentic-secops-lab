@@ -23,7 +23,8 @@ run its gateway on RKE2 via the Helm chart rather than the bare-host path.
 SUSE offers a **60-day trial**. Register at <https://www.suse.com/download/sles/>,
 tick the option asking for a registration code, and one is issued against your
 email address. That code activates updates through SUSE Customer Center, which is
-exactly what `scc_regcode` in `ansible/group_vars/all.yml` wants.
+exactly what `scc_regcode` in `ansible/group_vars/all/vars.yml` wants (kept
+in an ansible-vault file next to it — see the Ansible README).
 
 SLES 16.0 is listed among the available releases. The download links themselves are
 behind an SCC login, so the qcow2 URL is something you paste into your own vars file
@@ -119,7 +120,7 @@ which does need a vGPU or NVAIE licence.
 ## Guest install order
 
 1. **Register with SCC**, add the Containers module and the NVIDIA Compute module,
-   install the G07 driver (Turing or newer), confirm `nvidia-smi`
+   install SUSE's signed open driver (G06 — see below), confirm `nvidia-smi`
 2. **RKE2** server, single node, plus a StorageClass such as `local-path` — NIM model
    caches need PVCs
 3. **Rancher** if you're using AI Factory (its charts come from the SUSE Application
@@ -143,9 +144,54 @@ If the card is a GeForce rather than a datacentre part:
   in host firmware.
 - In the guest, blacklist `nouveau` and run headless — serial or virtio console.
 
-SUSE's G07 driver covers Turing and newer, so a GeForce card is fine as far as the
+SUSE ships two signed driver generations for 16.0, G06 (580 series) and G07
+(595), both covering Turing and newer; the Ansible defaults to G06 because that
+is the one built and rebooted end to end here (`nvidia_driver_generation` picks).
+One trap either way: enable only the `NVIDIA-Graphics-Drivers` repo that comes
+with the product registration. With the CUDA repo enabled alongside it, the
+userspace versions collide and zypper quietly falls back to the DKMS build —
+gcc, kernel-devel, ~50 packages. Either way a GeForce card is fine as far as the
 driver is concerned. Licensing is the constraint, not support: see
 [gpu-sizing.md](gpu-sizing.md#nim-licensing).
+
+## If the host is also your workstation
+
+A headless server can give the card away for good. A workstation usually
+cannot: the firmware console is on the card, and the host may want it back
+between lab sessions — CUDA, `nvidia-smi`, whatever else it runs on the card.
+Two things follow.
+
+**Keep the host console off the card.** A GPU the guest owns is dark to the
+host, so the console has to live on another one — an iGPU is ideal, with a
+monitor or an IP-KVM on the motherboard output. Set the firmware's primary
+display to that GPU; it puts BIOS and GRUB there too, which is the whole point
+of an IP-KVM. Until that reboot the kernel console can be moved by hand.
+fbcon only draws on one framebuffer, so a screen plugged into the iGPU shows
+nothing by itself:
+
+```bash
+cat /sys/class/graphics/fb*/name                    # which fb is the iGPU
+echo detect | sudo tee /sys/class/drm/cardN-HDMI-A-1/status   # if still "disconnected" after plugging in
+sudo apt install fbset && for n in 1 2 3 4 5 6; do sudo con2fbmap $n 1; done
+```
+
+Map every VT, not just tty1. Keystrokes go to the *active* VT wherever it is
+drawn — one Ctrl+Alt+F2 on the old keyboard and the new screen shows a stale
+tty1 that looks dead while the typing lands on the other monitor.
+
+**Decide whether the card is handed over for good.** `gpu_passthrough_mode`
+in the Ansible vars supports both: `permanent` blacklists the host driver
+from boot and suits a headless box; `off` undoes it and hands the card back
+after a reboot. Together they are a reboot-based toggle, so the same host
+keeps `nvidia-smi` and CUDA between lab sessions. There is also an
+experimental `on-demand` mode where libvirt moves the card only while the
+guest runs — but a live hand-over of a card that is the firmware's boot VGA
+device, with a monitor on it, **hard-froze the Ryzen 9900X / RTX 4080 SUPER
+host this was worked out on** (last kernel line: `vfio-pci 0000:01:00.0:
+vgaarb: deactivate vga console`, then nothing until the power button). The
+mode now refuses to run in that situation. Make the other GPU the firmware's
+primary display before either mode, and treat on-demand as a lab experiment,
+not the default.
 
 ## Host memory
 

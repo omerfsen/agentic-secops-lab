@@ -1,4 +1,4 @@
-# Copy to all.yml and edit. all.yml is gitignored — it holds the SCC code.
+# Copy to group_vars/all/vars.yml and edit. That directory is gitignored.
 ---
 # ── VM shape ─────────────────────────────────────────────────────────────
 vm_name: secops-lab
@@ -8,6 +8,9 @@ vm_vcpus: 16
 vm_memory_mb: 65536
 vm_disk_gb: 500
 vm_disk_path: /var/lib/libvirt/images
+# Start the guest with the host? Say no on a workstation that hands the GPU
+# over on demand — otherwise the guest takes the card at every boot.
+vm_autostart: true
 
 # ── Network: bridged, static ─────────────────────────────────────────────
 # If this bridge doesn't already exist, host.yml creates it (Debian/Ubuntu
@@ -31,6 +34,25 @@ gpu_pci_ids:
   - "0000:01:00.0"
   - "0000:01:00.1"
 
+# How the card is handed over:
+#   permanent  the host never loads a driver for it; vfio-pci owns it from
+#              boot. One reboot after the first run. Right for a headless box.
+#   on-demand  EXPERIMENTAL. The host keeps the card — its own driver, CUDA,
+#              nvidia-smi — and libvirt hands it to the guest only while the
+#              guest runs. No reboot. Refused unless another GPU is the
+#              firmware's primary display and nothing is plugged into the
+#              card: a live hand-over of a boot-VGA card with a monitor on it
+#              has hard-frozen a host. Prefer permanent + off as a toggle.
+#   off        undo either. Removes the config, rebuilds the initrd; the host
+#              driver is back after a reboot. host.yml then stops after the
+#              host checks and does not build the guest.
+gpu_passthrough_mode: permanent
+
+# on-demand only: rehearse the hand-over during host.yml (detach to vfio-pci,
+# reattach to the host driver) so a setup that cannot do it fails there, not
+# at the first guest start. Seconds; the host loses the card for that long.
+gpu_handover_rehearsal: true
+
 # ── KVM host ─────────────────────────────────────────────────────────────
 # The host OS is detected automatically; Ubuntu 24.04 LTS and SLES are both
 # handled. Only the guest has to be SLES.
@@ -49,10 +71,18 @@ sles_image_checksum: ""      # sha256:...
 # to build this. The clock starts at registration, not at first boot.
 #
 # Don't put the real code here — see ansible/README.md#secrets. Create
-# group_vars/vault.yml (ansible-vault, gitignored either way) with:
+# group_vars/all/vault.yml (ansible-vault, gitignored either way) with:
 #   vault_scc_regcode: "your-code-here"
-# then encrypt it: ansible-vault encrypt group_vars/vault.yml
+# then encrypt it: ansible-vault encrypt group_vars/all/vault.yml
 scc_regcode: "{{ vault_scc_regcode }}"
 
 # ── Versions ─────────────────────────────────────────────────────────────
 rke2_version: ""             # empty = latest stable
+
+# ── Reaching the cluster ─────────────────────────────────────────────────
+# guest.yml copies the admin kubeconfig to ansible/<guest>.kubeconfig on the
+# control node (gitignored) and makes kubectl work for the login user in the
+# guest. It can also install a matching kubectl into /usr/local/bin on the
+# control node — off by default since that needs sudo where you run Ansible.
+fetch_kubeconfig: true
+install_local_kubectl: false

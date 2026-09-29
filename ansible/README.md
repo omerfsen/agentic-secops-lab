@@ -26,8 +26,9 @@ Corrections are the most useful contribution this repo can receive.
 ```bash
 cd ansible
 cp inventory.example.ini inventory.ini
-cp group_vars/all.example.yml group_vars/all.yml
-$EDITOR group_vars/all.yml        # SCC code, IP, GPU PCI ids, image URL
+mkdir -p group_vars/all
+cp group_vars/all.example.yml group_vars/all/vars.yml
+$EDITOR group_vars/all/vars.yml   # IP, GPU PCI ids, image URL, mode
 ```
 
 Find the GPU's PCI addresses — you need **both** functions, the GPU and its
@@ -48,32 +49,36 @@ ansible-playbook guest.yml
 
 ## Secrets
 
-The SCC registration code doesn't live in `group_vars/all.yml` in plaintext —
-`all.yml` just references `{{ vault_scc_regcode }}`, and the real value sits
-encrypted in `group_vars/vault.yml` (ansible-vault). The vault password itself
-lives outside the repo entirely, at `~/.secops-lab-vault-pass`, referenced by
-`vault_password_file` in `ansible.cfg` — so it survives `git add -A`,
-archiving the repo, or anything else that scoops up the whole tree.
+The SCC registration code doesn't live in `group_vars/all/vars.yml` in
+plaintext — `vars.yml` just references `{{ vault_scc_regcode }}`, and the
+real value sits encrypted in `group_vars/all/vault.yml` (ansible-vault). Both
+files are in the `group_vars/all/` directory because Ansible loads every file
+in there for the `all` group; a file called `group_vars/vault.yml` would be
+looked up for a group named "vault" and silently ignored. The vault password
+itself lives outside the repo entirely, at `~/.secops-lab-vault-pass`,
+referenced by `vault_password_file` in `ansible.cfg` — so it survives
+`git add -A`, archiving the repo, or anything else that scoops up the tree.
 
 Setting it up from scratch:
 
 ```bash
 openssl rand -base64 32 > ~/.secops-lab-vault-pass
 chmod 600 ~/.secops-lab-vault-pass
-echo 'vault_scc_regcode: "your-trial-code-here"' > group_vars/vault.yml
-ansible-vault encrypt group_vars/vault.yml
+echo 'vault_scc_regcode: "your-trial-code-here"' > group_vars/all/vault.yml
+ansible-vault encrypt group_vars/all/vault.yml
 ```
 
 `ansible-playbook` picks up both automatically via `ansible.cfg` — no
 `--ask-vault-pass` needed. To read or edit it back:
 
 ```bash
-ansible-vault view group_vars/vault.yml
-ansible-vault edit group_vars/vault.yml
+ansible-vault view group_vars/all/vault.yml
+ansible-vault edit group_vars/all/vault.yml
 ```
 
-`group_vars/vault.yml` is gitignored on top of being encrypted — there's no
-reason to publish even the encrypted form of a personal trial code.
+The whole `group_vars/all/` directory is gitignored on top of the vault
+being encrypted — there's no reason to publish even the encrypted form of a
+personal trial code.
 
 ## The SSH key
 
@@ -86,6 +91,31 @@ ssh -i .keys/secops-lab_ed25519 sles@192.168.1.50
 ```
 
 Re-running is safe: an existing key is reused rather than replaced.
+
+## Handing the GPU over
+
+`gpu_passthrough_mode` in `group_vars/all/vars.yml` picks how the card reaches the
+guest, and either choice is revertible.
+
+- `permanent` (the default) blacklists the host driver and binds `vfio-pci`
+  at boot — the first run stops and asks for a reboot, the second carries on
+  into building the VM. Right for a headless box.
+- `on-demand` (experimental) leaves the card with the host — its own
+  driver, CUDA, `nvidia-smi` all keep working — and libvirt hands it to the
+  guest only while the guest runs, via a hook installed under
+  `/etc/libvirt/hooks/`. No reboot. It is refused outright unless another
+  GPU is the firmware's primary display and nothing is plugged into the
+  card: a live hand-over of a boot-VGA card with a monitor attached
+  hard-froze a Ryzen 9900X / RTX 4080 SUPER host (last kernel line
+  `vfio-pci: vgaarb: deactivate vga console`). `host.yml` rehearses the
+  hand-over once so a setup that cannot do it fails there rather than at the
+  first guest start; nothing may be using the card when the guest starts, or
+  the hook refuses. `vm_autostart: false` is the sensible pairing. For a
+  workstation, `permanent` plus `off` as a reboot-based toggle is the safer
+  way to get the same "host keeps `nvidia-smi` between lab sessions" result.
+- `off` undoes either: config removed, initrd rebuilt, host driver back
+  after a reboot, and `host.yml` stops after the host checks instead of
+  building a guest against a card the host still owns.
 
 ## What the checks are for
 
@@ -103,7 +133,7 @@ system that looks fine and isn't:
 
 ## Network
 
-Bridged with a static address, set in `group_vars/all.yml` and applied by
+Bridged with a static address, set in `group_vars/all/vars.yml` and applied by
 cloud-init. Defaults to `br10`, not `br0` — a fresh host sometimes already has
 `br0` from something else, and `host_bridge` intentionally doesn't touch a
 bridge it didn't create. If the bridge doesn't already exist on the host,
@@ -114,9 +144,28 @@ bridge yourself with wicked or NetworkManager and the role skips it, same as
 it does on a re-run once the bridge exists. Already have a bridge you built by
 hand? Nothing to do — it's left alone either way.
 
+## Using the cluster
+
+`guest.yml` leaves `kubectl` working for the login user inside the guest and
+copies the admin kubeconfig to `ansible/<guest>.kubeconfig` on the machine
+you ran it from, pointed at the guest's address (gitignored — it is cluster
+admin). With `install_local_kubectl: true` it also drops a matching `kubectl`
+into `/usr/local/bin` there.
+
+```bash
+export KUBECONFIG=$PWD/secops-lab.kubeconfig
+kubectl get nodes
+```
+
 ## Where it stops
 
-At a single-node RKE2 cluster with the GPU visible to the guest. GPU Operator,
+At a single-node RKE2 cluster with the GPU visible to the guest. One caveat
+worth knowing in a security lab: SLES 16 enforces SELinux, and the tarball
+install used here does not ship RKE2's SELinux policy, so the host enforces
+but the containers run unconfined (no denials, everything works, nothing is
+confined). Switching `INSTALL_RKE2_METHOD` to `rpm` pulls in `rke2-selinux`
+and confines them — at the cost of a distro-specific RPM repo and a binary at
+`/usr/bin/rke2` instead of `/usr/local/bin`. GPU Operator,
 NeuVector, OpenShell and the agent stack are documented in `../docs/` but not
 automated: OpenShell is alpha and the SUSE SecOps blueprints aren't public, so
 automating them now would encode guesses.

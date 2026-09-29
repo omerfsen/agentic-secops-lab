@@ -37,7 +37,7 @@
         fail_msg: >-
           Could not work out which NIC to bridge (no default route found, or
           more than one candidate). Set host_bridge_uplink explicitly in
-          group_vars/all.yml, e.g. host_bridge_uplink: enp3s0.
+          group_vars/all/vars.yml, e.g. host_bridge_uplink: enp3s0.
 
     - name: Warn that connectivity will blip while the bridge comes up
       ansible.builtin.debug:
