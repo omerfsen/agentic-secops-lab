@@ -14,4 +14,7 @@
   roles:
     - host_bridge
     - kvm_host
-    - vm_create
+    # Not check-mode safe (it copies a disk it would only have downloaded), so
+    # --check validates the host half and stops here.
+    - role: vm_create
+      when: gpu_passthrough_mode != 'off' and not ansible_check_mode

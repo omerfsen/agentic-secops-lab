@@ -123,19 +123,17 @@
       the primary display in firmware, or add
       initcall_blacklist=simpledrm_platform_driver_init to the kernel cmdline
       — this play won't edit your bootloader. Either way, a local host console
-      needs to be on a different GPU from now on; this one goes dark once
-      vfio-pci owns it.
+      needs to be on a different GPU: this one is dark whenever vfio-pci owns
+      it (always in permanent mode, while the guest runs in on-demand mode).
   loop: "{{ boot_vga.results }}"
   loop_control: {label: "{{ item.item }}"}
   when: item.stdout | trim == '1'
 
-# ── Nothing on the host may hold the card ────────────────────────────────
-# No hard-fail here on purpose: on a genuinely first run the GPU is *expected*
-# to still be on the host driver (nvidia/nouveau) — that's exactly the state
-# the blacklist + vfio.conf tasks below fix. Failing before they even get a
-# chance to run would make the "reboot and run again" flow described in
-# host.yml and README.md impossible to reach. The real gate is the assert at
-# the bottom, after a reboot has had a chance to apply the new config.
+# ── Who holds the card right now ─────────────────────────────────────────
+# Informational only: what counts as "right" depends on the mode. In
+# permanent mode the host driver is expected here on a first run (the mode
+# file writes the config and gates on a reboot); in on-demand mode it is the
+# normal resting state; in off mode it is the goal.
 - name: Check which driver currently owns each function
   ansible.builtin.shell: |
     set -o pipefail
@@ -150,88 +148,18 @@
   ansible.builtin.debug:
     msg: >-
       {{ item.item }} -> {{ item.stdout }}
-      {{ '(host driver still owns this — expected before the first reboot)'
-         if item.stdout not in ['vfio-pci', 'none'] else '' }}
+      {{ '(host driver owns this — expected before the first reboot)'
+         if item.stdout not in ['vfio-pci', 'none'] and gpu_passthrough_mode == 'permanent'
+         else '' }}
   loop: "{{ current_drivers.results }}"
   loop_control: {label: "{{ item.item }}"}
 
-- name: Blacklist host GPU drivers
-  ansible.builtin.copy:
-    dest: /etc/modprobe.d/blacklist-gpu-passthrough.conf
-    mode: "0644"
-    content: |
-      blacklist nouveau
-      blacklist nvidia
-      blacklist nvidia_drm
-      blacklist nvidia_modeset
-      options nouveau modeset=0
-  register: gpu_blacklist
-
-# The softdeps cover anything that still loads a driver by name despite the
-# blacklist (nvidia-modprobe, udev coldplug of the HDMI audio function via
-# snd_hda_intel): vfio-pci is loaded first and claims the ids, so the other
-# driver finds nothing left to bind.
-- name: Bind the devices to vfio-pci at boot
-  ansible.builtin.copy:
-    dest: /etc/modprobe.d/vfio.conf
-    mode: "0644"
-    content: |
-      options vfio-pci ids={{ vfio_device_ids | join(',') }} disable_vga=1
-      softdep nvidia pre: vfio-pci
-      softdep nouveau pre: vfio-pci
-      softdep snd_hda_intel pre: vfio-pci
-  vars:
-    vfio_device_ids: "{{ gpu_vendor_device_ids.results | map(attribute='stdout') | list }}"
-  register: vfio_bind
-
-# With the host driver blacklisted nothing would pull vfio-pci in on its own
-# at boot — load it explicitly so it claims the card before anything else.
-- name: Load vfio-pci at boot
-  ansible.builtin.copy:
-    dest: /etc/modules-load.d/vfio-pci.conf
-    mode: "0644"
-    content: |
-      vfio-pci
-  register: vfio_modload
-
-# A plain task rather than a handler: handlers are skipped when a play fails,
-# and the assert below fails by design on a first run. The initrd has to be
-# rebuilt before that point or the reboot changes nothing.
-- name: Rebuild the initrd so the new modprobe config is in it
-  ansible.builtin.command: "{{ initrd_rebuild_cmd }}"
-  when: gpu_blacklist.changed or vfio_bind.changed or vfio_modload.changed
-  changed_when: true
-
-- name: Confirm vfio-pci is bound to every requested function
-  ansible.builtin.shell: |
-    set -o pipefail
-    basename "$(readlink -f /sys/bus/pci/devices/{{ item }}/driver 2>/dev/null)" 2>/dev/null || echo none
-  args: {executable: /bin/bash}
-  changed_when: false
-  check_mode: false
-  loop: "{{ gpu_pci_ids }}"
-  register: final_drivers
-
-- name: Report binding state
-  ansible.builtin.debug:
-    msg: >-
-      {{ item.item }} -> {{ item.stdout }}
-      {{ '(ready)' if item.stdout == 'vfio-pci' else '(NOT bound — reboot required after the initrd rebuild)' }}
-  loop: "{{ final_drivers.results }}"
-  loop_control: {label: "{{ item.item }}"}
-
-# This is the real gate. Failing here on a first run is expected and correct:
-# the modprobe config above only takes effect after a reboot, and vm_create
-# must not run against a GPU the host driver still owns.
-- name: Stop here until the GPU is actually on vfio-pci
+- name: Validate gpu_passthrough_mode
   ansible.builtin.assert:
-    that: item.stdout == 'vfio-pci'
+    that: gpu_passthrough_mode in ['permanent', 'on-demand', 'off']
     fail_msg: >-
-      {{ item.item }} is still on '{{ item.stdout }}', not vfio-pci. If the
-      blacklist/vfio tasks above just changed something, this is the expected
-      first-run stop: REBOOT the host, then run host.yml again and it will
-      carry on into vm_create. If nothing changed and it still isn't vfio-pci
-      after a reboot, the host driver is loading before vfio-pci — check
-      `lsinitramfs` (Ubuntu) / `lsinitrd` (SLES) for the vfio.conf options.
-  loop: "{{ final_drivers.results }}"
-  loop_control: {label: "{{ item.item }}"}
+      gpu_passthrough_mode must be 'permanent', 'on-demand' or 'off', got
+      '{{ gpu_passthrough_mode }}'. See group_vars/all.example.yml.
+
+- name: Apply the selected hand-over mode
+  ansible.builtin.include_tasks: "mode_{{ gpu_passthrough_mode }}.yml"

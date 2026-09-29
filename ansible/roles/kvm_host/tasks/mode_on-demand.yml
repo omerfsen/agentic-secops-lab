@@ -1,0 +1,146 @@
+---
+# on-demand (EXPERIMENTAL): the host keeps the card. libvirt moves it to
+# vfio-pci when the guest starts and back to the host driver when it stops —
+# that is what a managed hostdev does on its own. The hook only makes sure
+# the move can succeed (nothing holding the card) and restores what it had
+# to stop. No reboot, no blacklist.
+#
+# A live hand-over hard-froze a Ryzen 9900X / RTX 4080 SUPER host on
+# 2026-09-28: the card was the firmware's boot VGA device with a monitor on
+# it, and the last kernel line was "vfio-pci 0000:01:00.0: vgaarb: deactivate
+# vga console". Hence the two hard gates below — no override.
+
+- name: Drop any permanent-mode config
+  ansible.builtin.include_tasks: permanent_absent.yml
+
+- name: Refuse to continue while the card is still on vfio-pci from permanent mode
+  ansible.builtin.assert:
+    that: not card_still_on_vfio | bool
+    fail_msg: >-
+      The card is still on vfio-pci from a previous permanent-mode setup. That
+      config has just been removed and the initrd rebuilt — reboot, then run
+      host.yml again.
+
+- name: Refuse on-demand mode while the card is the firmware's boot VGA device
+  ansible.builtin.assert:
+    that: boot_vga.results | map(attribute='stdout') | map('trim') | select('equalto', '1') | list | length == 0
+    fail_msg: >-
+      One of {{ gpu_pci_ids | join(', ') }} is the boot VGA device. Handing
+      that card over live has hard-frozen a host. Set the firmware's primary
+      display to another GPU and reboot first — or use
+      gpu_passthrough_mode: permanent, which never touches the card live.
+
+- name: List displays currently driven by the card
+  ansible.builtin.shell: |
+    set -o pipefail
+    for c in /sys/class/drm/card*-*; do
+      case "$(readlink -f "$c")" in
+        *"/{{ item }}/"*) [ "$(cat "$c/enabled" 2>/dev/null)" = enabled ] && basename "$c" ;;
+      esac
+    done
+    true
+  args: {executable: /bin/bash}
+  changed_when: false
+  check_mode: false
+  loop: "{{ gpu_pci_ids }}"
+  register: active_displays
+
+- name: Refuse on-demand mode while the card is driving a display
+  ansible.builtin.assert:
+    that: active_displays.results | map(attribute='stdout_lines') | flatten | length == 0
+    fail_msg: >-
+      The card is driving a display right now
+      ({{ active_displays.results | map(attribute='stdout_lines') | flatten | join(', ') }}).
+      Unplug it or move it to the other GPU before a live hand-over.
+
+- name: Keep vfio-pci out of legacy VGA arbitration when libvirt loads it
+  ansible.builtin.copy:
+    dest: /etc/modprobe.d/vfio-pci-options.conf
+    mode: "0644"
+    content: |
+      options vfio-pci disable_vga=1
+
+- name: Install what the hook needs
+  ansible.builtin.package:
+    name: psmisc
+    state: present
+
+- name: Ensure the hook directory exists
+  ansible.builtin.file:
+    path: /etc/libvirt/hooks/qemu.d
+    state: directory
+    mode: "0755"
+
+- name: Install the hand-over hook
+  ansible.builtin.template:
+    src: gpu-handover-hook.sh.j2
+    dest: "/etc/libvirt/hooks/qemu.d/{{ vm_name }}-gpu-handover"
+    mode: "0755"
+  register: hook
+
+# libvirt only looks for hook scripts when it starts.
+- name: Restart libvirt so it picks the hook up
+  ansible.builtin.systemd:
+    name: "{{ libvirt_service }}"
+    state: restarted
+  when: hook.changed
+
+- name: Warn if the host console is on the card
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item }} is the boot VGA device, so the host console follows the
+      card: it moves to the other GPU when the guest starts and comes back
+      when it stops. If you want a console that stays put, make the other GPU
+      the firmware's primary display.
+  loop: "{{ boot_vga.results }}"
+  loop_control: {label: "{{ item.item }}"}
+  when: item.stdout | trim == '1'
+
+# Detach to vfio-pci and reattach to the host driver once, now, so a setup
+# that cannot hand the card over fails here instead of at the first guest
+# start. Same calls libvirt makes; the host loses the card for a few seconds.
+- name: Rehearse the hand-over
+  ansible.builtin.shell: |
+    set -o pipefail
+    hook="/etc/libvirt/hooks/qemu.d/{{ vm_name }}-gpu-handover"
+    devs="{{ gpu_pci_ids | join(' ') }}"
+    drv() { basename "$(readlink -f /sys/bus/pci/devices/$1/driver 2>/dev/null)" 2>/dev/null || echo none; }
+    nodedev() { local d="$1"; d="${d//:/_}"; echo "pci_${d//./_}"; }
+    before=""; for d in $devs; do before="$before $d=$(drv "$d")"; done
+    "$hook" "{{ vm_name }}" prepare begin
+    reattach() {
+      for d in $devs; do virsh nodedev-reattach "$(nodedev "$d")" >/dev/null 2>&1 || true; done
+      "$hook" "{{ vm_name }}" release end || true
+    }
+    trap reattach EXIT
+    for d in $devs; do timeout 60 virsh nodedev-detach "$(nodedev "$d")"; done
+    for d in $devs; do
+      [ "$(drv "$d")" = vfio-pci ] || { echo "$d is on $(drv "$d") after detach, expected vfio-pci"; exit 1; }
+    done
+    trap - EXIT
+    reattach
+    sleep 2
+    after=""; for d in $devs; do after="$after $d=$(drv "$d")"; done
+    echo "before:  $before"
+    echo "detached: every function on vfio-pci"
+    echo "after:   $after"
+    for d in $devs; do
+      [ "$(drv "$d")" != vfio-pci ] || { echo "$d stayed on vfio-pci after reattach"; exit 1; }
+    done
+    if command -v nvidia-smi >/dev/null; then nvidia-smi -L; fi
+  args: {executable: /bin/bash}
+  register: rehearsal
+  changed_when: false
+  when: gpu_handover_rehearsal | bool
+
+- name: Show the rehearsal
+  ansible.builtin.debug:
+    msg: "{{ rehearsal.stdout_lines }}"
+  when: gpu_handover_rehearsal | bool and not ansible_check_mode
+
+- name: Report
+  ansible.builtin.debug:
+    msg: >-
+      on-demand mode ready: starting {{ vm_name }} moves the card to the guest,
+      stopping it hands the card back to the host driver. Nothing may be using
+      the card when the guest starts — the hook refuses otherwise.

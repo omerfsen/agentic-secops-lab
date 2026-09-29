@@ -1,0 +1,63 @@
+#!/bin/bash
+# libvirt qemu hook for {{ vm_name }}: hand the GPU over only while it runs.
+#
+# libvirt moves the card between the host driver and vfio-pci itself (the
+# hostdev is managed). This script only makes sure that can succeed and puts
+# back what it had to stop. It must never call virsh or the libvirt API —
+# libvirtd is blocked waiting for it.
+set -euo pipefail
+
+vm="$1" op="$2" sub="$3"
+[ "$vm" = "{{ vm_name }}" ] || exit 0
+
+gpu_ids="{{ gpu_pci_ids | join(' ') }}"
+flag="/run/{{ vm_name }}-gpu-handover"
+
+log() { logger -t "{{ vm_name }}-gpu" -- "$*"; echo "$*" >&2; }
+
+case "$op/$sub" in
+  prepare/begin)
+    # A live hand-over of a boot-VGA card, or one driving a monitor, has
+    # hard-frozen a host. Refuse both; libvirt turns exit 1 into a failed start.
+    for id in $gpu_ids; do
+      if [ "$(cat "/sys/bus/pci/devices/$id/boot_vga" 2>/dev/null)" = 1 ]; then
+        log "refusing to start $vm: $id is the firmware's boot VGA device — make another GPU the primary display first"
+        exit 1
+      fi
+      for c in /sys/class/drm/card*-*; do
+        case "$(readlink -f "$c")" in
+          *"/$id/"*)
+            if [ "$(cat "$c/enabled" 2>/dev/null)" = enabled ]; then
+              log "refusing to start $vm: $(basename "$c") on $id is driving a display — unplug it or move it to the other GPU"
+              exit 1
+            fi ;;
+        esac
+      done
+    done
+    if systemctl is-active -q nvidia-persistenced; then
+      systemctl stop nvidia-persistenced
+      touch "$flag.persistenced"
+      log "stopped nvidia-persistenced for the hand-over"
+    fi
+    # Anything holding the card makes the unbind fail or hang. Refuse early;
+    # libvirt turns a non-zero exit here into a failed guest start.
+    users="$(fuser /dev/nvidia* 2>/dev/null || true)"
+    if [ -n "${users// /}" ]; then
+      log "refusing to start {{ vm_name }}: the GPU is in use by pid(s)${users}. Stop them and start the guest again."
+      exit 1
+    fi
+    ;;
+  release/end)
+    # libvirt has already reattached the card to the host driver.
+    for id in $gpu_ids; do
+      drv="$(basename "$(readlink -f "/sys/bus/pci/devices/$id/driver" 2>/dev/null)" 2>/dev/null || echo none)"
+      log "$id back on host driver: $drv"
+    done
+    if [ -e "$flag.persistenced" ]; then
+      rm -f "$flag.persistenced"
+      systemctl start nvidia-persistenced
+      log "restarted nvidia-persistenced"
+    fi
+    ;;
+esac
+exit 0

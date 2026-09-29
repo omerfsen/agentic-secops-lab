@@ -1,0 +1,22 @@
+---
+# off: undo permanent mode and stop. host.yml does not build a guest in this
+# mode — there is nothing to hand it.
+
+- name: Drop the permanent-mode config
+  ansible.builtin.include_tasks: permanent_absent.yml
+
+- name: Remove the on-demand hook and its module option too, if present
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "/etc/libvirt/hooks/qemu.d/{{ vm_name }}-gpu-handover"
+    - /etc/modprobe.d/vfio-pci-options.conf
+
+- name: Report what happens next
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'Passthrough config removed — reboot and the host driver takes the card again.'
+         if permanent_removed.changed else 'No passthrough config present, nothing to undo.' }}
+      {{ 'It is on vfio-pci right now, so until that reboot the host still cannot use it.'
+         if card_still_on_vfio | bool else '' }}

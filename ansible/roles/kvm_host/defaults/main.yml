@@ -24,3 +24,8 @@ grub_cmdline_file: >-
 
 grub_update_cmd: >-
   {{ 'update-grub' if ansible_facts['os_family'] == 'Debian' else 'grub2-mkconfig -o /boot/grub2/grub.cfg' }}
+
+# How the card is handed to the guest — documented in group_vars/all.example.yml.
+gpu_passthrough_mode: permanent
+# on-demand only: detach/reattach once during host.yml to prove it works.
+gpu_handover_rehearsal: true
