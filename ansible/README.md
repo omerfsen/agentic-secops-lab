@@ -166,7 +166,15 @@ stack, one role each, each behind its own switch in `group_vars`.
 |---|---|---|
 | `k8s_tools` | helm (SLES ships it), default StorageClass | always |
 | `gpu_operator` | NVIDIA container toolkit on the node, GPU Operator with the driver and toolkit left host-managed, a CUDA job that proves a pod sees the card | `install_gpu_operator` |
-| `neuvector` | SUSE Security from the upstream chart, single-node sizing | `install_neuvector` |
+| `neuvector` | SUSE Security from the upstream chart, single-node sizing, UI behind Traefik | `install_neuvector` |
+| `vllm` | model serving: Nemotron Nano 9B FP8 on the one GPU, OpenAI API at `/vllm/v1` | `install_vllm` |
+| `openshell` | NVIDIA OpenShell gateway (alpha) with the Agent Sandbox CRDs, plus the CLI on the guest | `install_openshell` |
+
+UIs and APIs come through RKE2's bundled Traefik on the guest's address.
+Path prefixes are used where the app tolerates them (`https://<guest>/vllm/v1`);
+NeuVector's manager redirects to absolute paths, so it gets a hostname instead
+— `neuvector.<guest-ip>.sslip.io`, which any resolver turns into the guest's IP
+without DNS setup (`neuvector_ingress_host` overrides it).
 
 Two things the GPU role does that aren't in NVIDIA's docs, both learned on
 SLES 16:
