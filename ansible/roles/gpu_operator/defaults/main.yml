@@ -1,0 +1,5 @@
+---
+# Empty = whatever the NVIDIA Helm repo currently serves.
+gpu_operator_chart_version: ""
+# Set to false to skip the nvidia-smi job that proves a pod can see the card.
+gpu_operator_validate: true

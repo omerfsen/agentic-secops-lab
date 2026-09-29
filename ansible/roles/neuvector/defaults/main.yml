@@ -1,0 +1,3 @@
+---
+neuvector_chart_version: ""     # empty = whatever the NeuVector Helm repo serves
+neuvector_manager_nodeport: 30443

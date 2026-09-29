@@ -1,0 +1,144 @@
+---
+# GPU into Kubernetes. The driver stays the host's (SUSE-signed, installed by
+# guest.yml) and so does the container toolkit: RKE2 detects the runtime
+# binary at startup and wires containerd's "nvidia" RuntimeClass itself, so
+# the operator only has to run the device plugin and friends.
+
+- name: Is NVIDIA's container toolkit repo known?
+  ansible.builtin.command: zypper lr nvidia-container-toolkit
+  register: ctk_repo
+  changed_when: false
+  failed_when: false
+
+# SUSE 16 does not ship the toolkit; NVIDIA's own rpm repo installs cleanly.
+- name: Add NVIDIA's container toolkit repo
+  ansible.builtin.command: >-
+    zypper --non-interactive --gpg-auto-import-keys addrepo -f
+    https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo
+  when: ctk_repo.rc != 0
+  changed_when: true
+
+- name: Install the container toolkit
+  community.general.zypper:
+    name: nvidia-container-toolkit
+    state: present
+    update_cache: true
+  register: toolkit
+
+# SUSE's toolkit package defaults nvidia-container-cli to root:video, and
+# NVML then fails with "insufficient permissions" even as root; root:root
+# works. The runtime re-reads this file on every container start.
+- name: Run nvidia-container-cli as root:root
+  ansible.builtin.lineinfile:
+    path: /etc/nvidia-container-runtime/config.toml
+    regexp: '^user = '
+    line: 'user = "root:root"'
+
+# RKE2 only looks for the runtime at startup.
+- name: Restart RKE2 so it picks up the nvidia runtime
+  ansible.builtin.systemd:
+    name: rke2-server
+    state: restarted
+  when: toolkit.changed
+
+- name: Confirm containerd knows the nvidia runtime
+  ansible.builtin.command: grep -c nvidia /var/lib/rancher/rke2/agent/etc/containerd/config.toml
+  register: containerd_nvidia
+  changed_when: false
+  failed_when: containerd_nvidia.stdout | int == 0
+
+- name: Wait for the API server after the restart
+  ansible.builtin.command: kubectl get --raw /readyz
+  environment: {KUBECONFIG: /etc/rancher/rke2/rke2.yaml}
+  register: readyz
+  until: readyz.rc == 0 and readyz.stdout == 'ok'
+  retries: 30
+  delay: 5
+  changed_when: false
+
+- name: Add the NVIDIA Helm repo
+  ansible.builtin.command: helm repo add nvidia https://helm.ngc.nvidia.com/nvidia --force-update
+  changed_when: false
+
+# The values file is the change detector: helm only runs when it differs or
+# the release is missing, so re-runs don't churn release revisions.
+- name: Write the operator values
+  ansible.builtin.copy:
+    dest: /etc/secops-lab/gpu-operator-values.yaml
+    mode: "0644"
+    content: |
+      # chart version: {{ gpu_operator_chart_version or 'latest' }}
+      driver:
+        enabled: false
+      toolkit:
+        enabled: false
+  register: operator_values
+
+- name: Is the operator release deployed?
+  ansible.builtin.shell: |
+    set -o pipefail
+    helm status gpu-operator -n gpu-operator -o json | grep -c '"status":"deployed"'
+  args: {executable: /bin/bash}
+  environment: {KUBECONFIG: /etc/rancher/rke2/rke2.yaml}
+  register: operator_release
+  changed_when: false
+  failed_when: false
+
+- name: Install or upgrade the GPU Operator
+  ansible.builtin.command: >-
+    helm upgrade --install gpu-operator nvidia/gpu-operator
+    -n gpu-operator --create-namespace
+    -f /etc/secops-lab/gpu-operator-values.yaml
+    {% if gpu_operator_chart_version %}--version {{ gpu_operator_chart_version }}{% endif %}
+    --wait --timeout 20m
+  environment: {KUBECONFIG: /etc/rancher/rke2/rke2.yaml}
+  when: operator_values.changed or operator_release.stdout | trim != '1'
+  changed_when: true
+
+# Plain JSON rather than a jsonpath: the command module's argument parser eats
+# the backslash needed to escape the dot in nvidia.com/gpu.
+- name: Wait for the node to advertise the GPU
+  ansible.builtin.command: kubectl get node -o json
+  environment: {KUBECONFIG: /etc/rancher/rke2/rke2.yaml}
+  register: node_json
+  # ['items'], not .items — in Jinja that is the dict method.
+  until: (node_json.stdout | from_json)['items'][0].status.allocatable['nvidia.com/gpu'] | default(0) | int > 0
+  retries: 40
+  delay: 15
+  changed_when: false
+
+- name: Prove a pod can see the card
+  ansible.builtin.shell: |
+    set -o pipefail
+    kubectl delete job gpu-smoke -n gpu-operator --ignore-not-found >/dev/null
+    kubectl apply -n gpu-operator -f - <<'EOF'
+    apiVersion: batch/v1
+    kind: Job
+    metadata:
+      name: gpu-smoke
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 600
+      template:
+        spec:
+          restartPolicy: Never
+          runtimeClassName: nvidia
+          containers:
+            - name: smi
+              image: nvcr.io/nvidia/cuda:12.6.3-base-ubuntu24.04
+              command: ["nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader"]
+              resources:
+                limits:
+                  nvidia.com/gpu: 1
+    EOF
+    kubectl wait -n gpu-operator --for=condition=complete job/gpu-smoke --timeout=300s >/dev/null
+    kubectl logs -n gpu-operator job/gpu-smoke
+  args: {executable: /bin/bash}
+  environment: {KUBECONFIG: /etc/rancher/rke2/rke2.yaml}
+  register: gpu_smoke
+  changed_when: false
+  when: gpu_operator_validate | bool
+
+- name: Report
+  ansible.builtin.debug:
+    msg: "Pods can use the GPU: {{ gpu_smoke.stdout | default('(validation skipped)') }}"

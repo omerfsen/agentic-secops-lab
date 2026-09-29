@@ -1,0 +1,66 @@
+---
+# SUSE Security (NeuVector) from its upstream chart. Single-node sizing: one
+# controller, one scanner. The manager is exposed on a NodePort for the lab —
+# first login is admin/admin, change it.
+
+- name: Add the NeuVector Helm repo
+  ansible.builtin.command: helm repo add neuvector https://neuvector.github.io/neuvector-helm/ --force-update
+  changed_when: false
+
+- name: Write the NeuVector values
+  ansible.builtin.copy:
+    dest: /etc/secops-lab/neuvector-values.yaml
+    mode: "0644"
+    content: |
+      # chart version: {{ neuvector_chart_version or 'latest' }}
+      # RKE2 runs containerd on the k3s socket path.
+      runtimePath: /run/k3s/containerd/containerd.sock
+      controller:
+        replicas: 1
+      cve:
+        scanner:
+          replicas: 1
+      manager:
+        svc:
+          type: NodePort
+          nodePort: {{ neuvector_manager_nodeport }}
+  register: neuvector_values
+
+- name: Is the NeuVector release deployed?
+  ansible.builtin.shell: |
+    set -o pipefail
+    helm status neuvector -n neuvector -o json | grep -c '"status":"deployed"'
+  args: {executable: /bin/bash}
+  environment: {KUBECONFIG: /etc/rancher/rke2/rke2.yaml}
+  register: neuvector_release
+  changed_when: false
+  failed_when: false
+
+- name: Install or upgrade NeuVector
+  ansible.builtin.command: >-
+    helm upgrade --install neuvector neuvector/core
+    -n neuvector --create-namespace
+    -f /etc/secops-lab/neuvector-values.yaml
+    {% if neuvector_chart_version %}--version {{ neuvector_chart_version }}{% endif %}
+    --wait --timeout 15m
+  environment: {KUBECONFIG: /etc/rancher/rke2/rke2.yaml}
+  when: neuvector_values.changed or neuvector_release.stdout | trim != '1'
+  changed_when: true
+
+- name: Wait for every NeuVector pod to be ready
+  ansible.builtin.shell: |
+    set -o pipefail
+    kubectl get pods -n neuvector --no-headers | awk '{print $3}' | grep -vcE "^Running$|^Completed$" || true
+  args: {executable: /bin/bash}
+  environment: {KUBECONFIG: /etc/rancher/rke2/rke2.yaml}
+  register: nv_pending
+  until: nv_pending.stdout | trim == '0'
+  retries: 40
+  delay: 15
+  changed_when: false
+
+- name: Report
+  ansible.builtin.debug:
+    msg: >-
+      NeuVector up. Manager: https://{{ ansible_host }}:{{ neuvector_manager_nodeport }}
+      (admin/admin on first login — change it).

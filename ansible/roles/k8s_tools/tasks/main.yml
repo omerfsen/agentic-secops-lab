@@ -1,0 +1,36 @@
+---
+# helm on the guest (the playbooks drive charts from there, next to the
+# kubeconfig) and a default StorageClass so charts that ask for a PVC get one.
+
+- name: Directory for the chart values the roles write
+  ansible.builtin.file:
+    path: /etc/secops-lab
+    state: directory
+    mode: "0755"
+
+# SLES 16 ships helm in the base product.
+- name: Install helm
+  community.general.zypper:
+    name: helm
+    state: present
+
+- name: Drop a script-installed helm if one is lying around
+  ansible.builtin.file:
+    path: /usr/local/bin/helm
+    state: absent
+
+- name: Read the local-path StorageClass
+  ansible.builtin.command: kubectl get storageclass local-path -o json
+  environment: {KUBECONFIG: /etc/rancher/rke2/rke2.yaml}
+  register: local_path_sc
+  changed_when: false
+
+- name: Make local-path the default StorageClass
+  ansible.builtin.command: >-
+    kubectl patch storageclass local-path
+    -p '{"metadata": {"annotations": {"storageclass.kubernetes.io/is-default-class": "true"}}}'
+  environment: {KUBECONFIG: /etc/rancher/rke2/rke2.yaml}
+  when: >-
+    (local_path_sc.stdout | from_json).metadata.annotations['storageclass.kubernetes.io/is-default-class']
+    | default('false') != 'true'
+  changed_when: true

@@ -1,0 +1,21 @@
+---
+# Part 3 — runs against the VM once guest.yml has left a working RKE2.
+# Installs the public pieces of the stack, each behind its own switch in
+# group_vars (install_gpu_operator, install_neuvector, ...).
+#
+#   ansible-playbook stack.yml
+- name: Install the lab's Kubernetes stack
+  hosts: sles_guest
+  become: true
+  gather_facts: true
+  # sudo's secure_path has no /usr/local/bin, and the roles drive kubectl and
+  # helm as root.
+  environment:
+    KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+    PATH: /usr/local/bin:/var/lib/rancher/rke2/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  roles:
+    - k8s_tools
+    - role: gpu_operator
+      when: install_gpu_operator | bool
+    - role: neuvector
+      when: install_neuvector | bool
