@@ -136,6 +136,73 @@ the agent is trusted. That property is testable on one machine. The DPU layer ad
 a second, hardware-enforced line — but SUSE describes OpenShell on its own as a
 complete deployment.
 
+## What's next
+
+Things the lab is set up for but does not do yet, roughly in the order they
+make sense:
+
+- **Close the loop with NeuVector.** Run the seventh test with the admin
+  password, then go further: have NeuVector's network rules and alerts
+  react to a sandbox doing something denied, so both layers are visible in
+  one run.
+- **A real SecOps agent.** SUSE's remediation agent ships as a blueprint,
+  not a repo. Build a small one: an agent inside a sandbox that reads
+  NeuVector events through an approved rule, asks the local vLLM endpoint
+  what to do, and proposes a change that a human approves. That is the
+  article's whole loop on one machine.
+- **NemoClaw.** NVIDIA's operator front end for OpenShell is now public.
+  Attach it to this gateway and see what it adds over the raw CLI.
+- **NeMo Guardrails** in front of the vLLM endpoint, so the model side has
+  a policy too, not only the sandbox side.
+- **Real users on the gateway.** Replace `allowUnauthenticatedUsers` with
+  OIDC, and import real provider profiles (NVIDIA, OpenAI, GitHub) instead
+  of the test's echo profile.
+- **SELinux confinement for RKE2.** The tar install leaves containerd
+  unconfined; the RPM install fixes that and is the supported path on SLES.
+- **On-demand GPU mode.** Moving the card between host and guest without a
+  reboot is written and gated off; it needs a second GPU or a non-boot GPU
+  to be safe. See [docs/gpu-modes.md](docs/gpu-modes.md).
+- **A bigger planner model** when the GPU allows it. Nemotron Nano stands in
+  for Nemotron 3 here; [docs/gpu-sizing.md](docs/gpu-sizing.md) has the
+  numbers.
+- **A second VM** as a separate compute domain, to approximate what the DPU
+  layer gives without the hardware.
+
+## Learn more
+
+The articles and the announcement:
+
+- SUSE, [We Gave Our Agents Autonomy. Here's How We Kept Control][suse-post]
+- SUSE, [Agentic SecOps on SUSE AI Factory with NVIDIA Agent Safety Platform](https://www.suse.com/c/agentic-secops-on-suse-ai-factory-with-nvidia-agent-safety-platform/)
+- NVIDIA, [Open Agent Safety Platform announcement](https://nvidianews.nvidia.com/news/open-agent-safety-platform)
+- [SUSE AI](https://www.suse.com/products/ai/) and [SUSE Security (NeuVector)](https://www.suse.com/products/neuvector/) product pages
+
+The sandbox layer:
+
+- [OpenShell on GitHub](https://github.com/NVIDIA/OpenShell) and the
+  [OpenShell docs](https://docs.nvidia.com/openshell/latest/), in particular
+  the [default policy](https://docs.nvidia.com/openshell/latest/how-it-works/policies/default-policy)
+  and [provider profiles](https://docs.nvidia.com/openshell/latest/how-it-works/providers/profiles)
+- [Agent Sandbox](https://github.com/kubernetes-sigs/agent-sandbox), the
+  Kubernetes SIG project OpenShell builds on
+- [NemoClaw](https://github.com/NVIDIA/NemoClaw),
+  [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) and the
+  [NeMo Agent Toolkit](https://github.com/NVIDIA/NeMo-Agent-Toolkit)
+- [Landlock](https://docs.kernel.org/userspace-api/landlock.html) in the
+  kernel docs, and the [OCSF schema](https://schema.ocsf.io/) the audit
+  events are classified against
+
+The platform underneath:
+
+- [SLES 16.0 documentation](https://documentation.suse.com/sles/16.0/) and
+  the [SLES download page](https://www.suse.com/download/sles/)
+- [RKE2 docs](https://docs.rke2.io/) and [Traefik](https://doc.traefik.io/traefik/)
+- [NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/)
+- [NeuVector docs](https://open-docs.neuvector.com/)
+- [vLLM docs](https://docs.vllm.ai/) and the
+  [Nemotron Nano 9B v2 FP8 model card](https://huggingface.co/nvidia/NVIDIA-Nemotron-Nano-9B-v2-FP8)
+- [libvirt](https://libvirt.org/) for the KVM side
+
 ## Licence summary
 
 By code licence, nearly everything in the pipeline is open source. The exceptions:
