@@ -9,6 +9,8 @@ Ansible playbooks build all of it from a fresh Ubuntu host and a SLES trial. A
 [test directory](test/) then checks what SUSE says about the sandbox against
 the running system and records the outcome in [test/results.md](test/results.md).
 
+This also have a [linkedin article](https://www.linkedin.com/pulse/agentic-secops-one-workstation-rebuilding-suse-ai-factory-omer-sen-v3gqe/)
+
 > **Need the GPU back on the host, or back in the guest?** The switch is one
 > variable, one playbook and one reboot in either direction —
 > **[docs/gpu-modes.md](docs/gpu-modes.md)**.
