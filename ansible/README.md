@@ -115,7 +115,12 @@ guest, and either choice is revertible.
   way to get the same "host keeps `nvidia-smi` between lab sessions" result.
 - `off` undoes either: config removed, initrd rebuilt, host driver back
   after a reboot, and `host.yml` stops after the host checks instead of
-  building a guest against a card the host still owns.
+  building a guest against a card the host still owns. The guest stays
+  defined but its autostart is disabled and its hostdevs are set to
+  `managed='no'`, so a stray `virsh start` fails cleanly rather than making
+  libvirt detach the card from the host driver live (which has frozen this
+  host). Permanent mode uses `managed='no'` too — vfio-pci owns the card from
+  boot, libvirt never has to move it.
 
 ## What the checks are for
 
