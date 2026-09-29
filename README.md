@@ -4,14 +4,19 @@ Notes on running the SUSE/NVIDIA agentic SecOps stack — the one described in
 [*We Gave Our Agents Autonomy. Here's How We Kept Control*][suse-post] — on a
 **single SLES KVM guest with one consumer GPU**.
 
+> **Need the GPU back on the host, or back in the guest?** The switch is one
+> variable, one playbook and one reboot in either direction —
+> **[docs/gpu-modes.md](docs/gpu-modes.md)**.
+
 Two things live here:
 
 - **[Component inventory](docs/components.md)** — all 29 named components with their
   licences, and which are actually integrated today versus announced.
 - **Install notes** — [what fits on one VM](docs/single-vm.md),
-  [SLES and KVM setup](docs/sles-kvm.md), and [GPU sizing](docs/gpu-sizing.md).
-- **[Ansible](ansible/)** — two playbooks: build the VM on the KVM host, then
-  provision it. Untested; see its README.
+  [SLES and KVM setup](docs/sles-kvm.md), [GPU sizing](docs/gpu-sizing.md),
+  and [moving the GPU between host and guest](docs/gpu-modes.md).
+- **[Ansible](ansible/)** — three playbooks: build the VM on the KVM host,
+  provision it, then install the stack on it. See its README.
 
 ## What this is not
 
@@ -20,9 +25,12 @@ multiple clusters, 8×H100-class inference for the planner model, and BlueField-
 DPUs enforcing policy in a separate compute domain. None of that fits on a
 workstation.
 
-It is also **not a completed build**. These are notes compiled from SUSE's and
-NVIDIA's published material, worked through to the point of "would this deploy".
-Where something is unverified it says so. Corrections welcome — open an issue.
+It started as notes compiled from SUSE's and NVIDIA's published material,
+worked through to the point of "would this deploy". It has since been built
+for real on one machine — an Ubuntu 24.04 host with a Ryzen 9900X and an RTX
+4080 Super, a SLES 16.0 guest — up to a running OpenShell sandbox, and the
+Ansible encodes what that took. Where something is still unverified it says
+so. Corrections welcome — open an issue.
 
 Three specific limits worth knowing before you start:
 

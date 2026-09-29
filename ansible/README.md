@@ -12,14 +12,17 @@ Only the guest has to be SLES. The host role detects the OS and picks the right
 package manager, initrd tool and bootloader command, so an Ubuntu workstation
 with the GPU in it is a normal setup.
 
-## Not tested
+## Tested on
 
-**None of this has been run.** It was written from SUSE's and NVIDIA's published
-material without access to SLES, a GPU or a SUSE subscription. Treat it as an
-executable version of the notes in `../docs/`, not as something known to work.
-Run `--check` first, read what it intends to do, and expect to fix things.
+One machine, end to end: Ubuntu 24.04.5 host (Ryzen 9 9900X, RTX 4080 Super
+16 GB, 92 GB RAM), SLES 16.0 QU3 guest, RKE2 v1.36, GPU Operator v26.7,
+NeuVector core 2.11 / 5.6, vLLM 0.30 with Nemotron Nano 9B FP8, OpenShell
+0.1.2. All three playbooks re-run with zero changes. Everything that broke on
+the way is a comment next to the task that fixes it.
 
-Corrections are the most useful contribution this repo can receive.
+Other hardware and other SLES releases are untested — `--check` first, read
+what it intends to do, and corrections are the most useful contribution this
+repo can receive.
 
 ## Setup
 
