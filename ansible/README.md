@@ -189,15 +189,34 @@ SLES 16:
   exceeded", check for D-state `nvidia-container-runtime` processes before
   anything else.
 
+## Using the stack
+
+- **vLLM** — OpenAI-compatible at `http://<guest>/vllm/v1` (in-cluster
+  `http://vllm.vllm.svc:8000/v1`), model name `nemotron-nano-9b`. Nemotron
+  Nano reasons before it answers by default; pass
+  `"chat_template_kwargs": {"enable_thinking": false}` for a plain reply.
+- **NeuVector** — `https://neuvector.<guest-ip>.sslip.io/`, admin/admin at
+  first login.
+- **OpenShell** — on the guest as the login user: `openshell status`,
+  `openshell sandbox list`, `openshell sandbox create --name x --from <image>
+  -- <command>`. A port-forward to the gateway runs as a systemd service and
+  the CLI is registered as gateway `k8s`. Kubernetes gateways authenticate
+  users with OIDC; with no identity provider in the lab the role enables the
+  chart's "trusted local development" mode
+  (`openshell_allow_unauthenticated_users`), which is **unsafe anywhere
+  else** — configure OIDC before this gateway is reachable by anyone but you.
+
 ## Where it stops
 
-At a single-node RKE2 cluster with the GPU visible to the guest. One caveat
-worth knowing in a security lab: SLES 16 enforces SELinux, and the tarball
-install used here does not ship RKE2's SELinux policy, so the host enforces
-but the containers run unconfined (no denials, everything works, nothing is
-confined). Switching `INSTALL_RKE2_METHOD` to `rpm` pulls in `rke2-selinux`
-and confines them — at the cost of a distro-specific RPM repo and a binary at
-`/usr/bin/rke2` instead of `/usr/local/bin`. GPU Operator,
-NeuVector, OpenShell and the agent stack are documented in `../docs/` but not
-automated: OpenShell is alpha and the SUSE SecOps blueprints aren't public, so
-automating them now would encode guesses.
+At OpenShell's gateway with a sandbox you can start by hand. What is still
+not automated: NemoClaw and the NeMo agent pieces (Agent Toolkit, AI-Q,
+Guardrails, Relay) on top of the sandbox, and the SUSE SecOps blueprints,
+which have no public repository. OpenShell itself is alpha — expect chart
+churn; the version is pinned in `roles/openshell/defaults`.
+
+One caveat worth knowing in a security lab: SLES 16 enforces SELinux, and
+the tarball install used here does not ship RKE2's SELinux policy, so the
+host enforces but the containers run unconfined (no denials, everything
+works, nothing is confined). Switching `INSTALL_RKE2_METHOD` to `rpm` pulls
+in `rke2-selinux` and confines them — at the cost of a distro-specific RPM
+repo and a binary at `/usr/bin/rke2` instead of `/usr/local/bin`.
