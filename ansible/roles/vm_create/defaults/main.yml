@@ -1,4 +1,8 @@
 ---
 vm_user: sles
+vm_autostart: true
+# Fixed MAC so cloud-init can match the NIC by address: the NetworkManager
+# renderer in SUSE's image rejects a name glob ("missing macaddress").
+vm_mac: "{{ '52:54:00:' ~ (vm_name | hash('md5'))[0:2] ~ ':' ~ (vm_name | hash('md5'))[2:4] ~ ':' ~ (vm_name | hash('md5'))[4:6] }}"
 ssh_key_dir: "{{ playbook_dir }}/.keys"
 ssh_key_path: "{{ ssh_key_dir }}/{{ vm_name }}_ed25519"

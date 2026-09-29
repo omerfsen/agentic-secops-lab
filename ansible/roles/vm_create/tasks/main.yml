@@ -97,12 +97,16 @@
         version: 2
         ethernets:
           eth0:
-            # e* rather than en*: SUSE images may ship net.ifnames=0 (eth0)
-            match: {name: "e*"}
+            # By MAC, not name: cloud-init's NetworkManager renderer (SUSE's
+            # image) rejects a name glob and applies nothing at all.
+            match: {macaddress: "{{ vm_mac }}"}
+            set-name: eth0
             dhcp4: false
             addresses: [{{ vm_ip }}/{{ vm_prefix }}]
             routes:
-              - to: default
+              # 0.0.0.0/0, not "default": cloud-init's v2 parser rejects the
+              # netplan spelling ("Address default is not a valid ip address").
+              - to: 0.0.0.0/0
                 via: {{ vm_gateway }}
             nameservers:
               addresses: {{ vm_dns | to_json }}
@@ -142,7 +146,7 @@
     --boot uefi
     --disk path={{ vm_disk_path }}/{{ vm_name }}.qcow2,format=qcow2,bus=virtio
     --disk path={{ vm_disk_path }}/{{ vm_name }}-seed.iso,device=cdrom
-    --network bridge={{ vm_bridge }},model=virtio
+    --network bridge={{ vm_bridge }},model=virtio,mac={{ vm_mac }}
     {% for id in gpu_pci_ids %}--hostdev {{ id }},address.type=pci {% endfor %}
     --graphics none
     --console pty,target_type=serial
@@ -152,8 +156,20 @@
   when: dominfo.rc != 0
   changed_when: true
 
-- name: Autostart the domain
-  ansible.builtin.command: virsh autostart {{ vm_name }}
+# on-demand mode relies on libvirt binding and unbinding the card itself.
+- name: Confirm libvirt manages the hostdev binding
+  ansible.builtin.shell: |
+    set -o pipefail
+    virsh dumpxml {{ vm_name }} | grep -c "<hostdev mode='subsystem' type='pci' managed='yes'>"
+  args: {executable: /bin/bash}
+  register: managed_hostdevs
+  changed_when: false
+  check_mode: false
+  failed_when: managed_hostdevs.stdout | trim | int != gpu_pci_ids | length
+  when: gpu_passthrough_mode == 'on-demand' and not ansible_check_mode
+
+- name: Set whether the domain starts with the host
+  ansible.builtin.command: virsh autostart {{ '' if vm_autostart else '--disable ' }}{{ vm_name }}
   changed_when: false
 
 - name: Wait for SSH on the static address
