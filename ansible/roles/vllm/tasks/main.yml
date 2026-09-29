@@ -105,10 +105,18 @@
                   backend: {service: {name: vllm, port: {number: 8000}}}
   register: vllm_manifest
 
+# kubectl diff exits 1 when something would change; apply only then, so a
+# re-run never touches (and restarts) a serving vLLM for nothing.
+- name: Would applying change anything?
+  ansible.builtin.command: kubectl diff -f /etc/secops-lab/vllm.yaml
+  register: vllm_diff
+  changed_when: false
+  failed_when: vllm_diff.rc not in [0, 1]
+
 - name: Apply them
   ansible.builtin.command: kubectl apply -f /etc/secops-lab/vllm.yaml
-  register: vllm_apply
-  changed_when: "'created' in vllm_apply.stdout or 'configured' in vllm_apply.stdout"
+  when: vllm_diff.rc == 1
+  changed_when: true
 
 # First start pulls a ~10 GB image and a ~9 GB model.
 - name: Wait for vLLM to be ready
