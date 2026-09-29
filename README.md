@@ -1,14 +1,46 @@
 # agentic-secops-lab
 
-Notes on running the SUSE/NVIDIA agentic SecOps stack — the one described in
-[*We Gave Our Agents Autonomy. Here's How We Kept Control*][suse-post] — on a
-**single SLES KVM guest with one consumer GPU**.
+**TL;DR** — the SUSE/NVIDIA agentic SecOps stack from
+[*We Gave Our Agents Autonomy. Here's How We Kept Control*][suse-post],
+rebuilt on **one workstation**: a SLES 16.0 KVM guest with a consumer GPU passed
+through, RKE2, the NVIDIA GPU Operator, SUSE Security (NeuVector), vLLM serving
+a Nemotron model, and NVIDIA OpenShell running a real agent sandbox. Three
+Ansible playbooks build all of it from a fresh Ubuntu host and a SLES trial. A
+[test directory](test/) then checks what SUSE says about the sandbox against
+the running system and records the outcome in [test/results.md](test/results.md).
 
 > **Need the GPU back on the host, or back in the guest?** The switch is one
 > variable, one playbook and one reboot in either direction —
 > **[docs/gpu-modes.md](docs/gpu-modes.md)**.
 
-Two things live here:
+## What it is
+
+A working, single-VM version of the public half of that architecture, built
+and verified end to end, plus the notes and inventory that went into it:
+
+- **The platform.** Ubuntu 24.04 KVM host with the GPU bound to vfio-pci,
+  a SLES 16.0 guest on a bridged LAN address, NVIDIA G06 driver, RKE2 with
+  Traefik ingress — all from `ansible/host.yml` and `ansible/guest.yml`.
+- **The stack.** GPU Operator, NeuVector with its UI behind ingress, vLLM
+  serving Nemotron Nano 9B (FP8) on the one GPU with an OpenAI-style API,
+  and the OpenShell gateway with the Agent Sandbox CRDs and CLI — from
+  `ansible/stack.yml`, each piece behind its own switch.
+- **The proof.** Scripts under `test/` that create a sandbox and exercise
+  the claims one by one: egress denied until a human approves a rule and
+  allowed without a restart afterwards, Landlock keeping system paths and
+  shell profiles read-only, seccomp with no privilege path, no Kubernetes API
+  from inside, credentials injected by the supervisor rather than handed to
+  the agent, and every decision recorded as an OCSF event outside the
+  sandbox. Each test prints the evidence it saw.
+- **The reading.** A component inventory with licences, what fits on one
+  VM and what does not, GPU sizing, and how to move the GPU between host and
+  guest.
+
+What it costs to reproduce: one machine with a supported GPU, a
+[60-day SLES trial](docs/sles-kvm.md#getting-sles-without-a-subscription),
+and an afternoon.
+
+What lives here:
 
 - **[Component inventory](docs/components.md)** — all 29 named components with their
   licences, and which are actually integrated today versus announced.
@@ -17,6 +49,58 @@ Two things live here:
   and [moving the GPU between host and guest](docs/gpu-modes.md).
 - **[Ansible](ansible/)** — three playbooks: build the VM on the KVM host,
   provision it, then install the stack on it. See its README.
+- **[Claim tests](test/)** — scripts that put SUSE's statements about the
+  sandbox (deny-by-default egress, Landlock, seccomp, proxied credentials,
+  OCSF audit) to the test on the running lab, with the
+  [recorded results](test/results.md).
+
+## How it fits together
+
+```mermaid
+flowchart TB
+    op(["Operator: ansible, openshell CLI, kubectl, browser"])
+
+    subgraph host["KVM host — Ubuntu 24.04"]
+        br10["br10 bridge to the LAN"]
+        vfio["vfio-pci owns the GPU<br>(mode: permanent, revertible)"]
+        libvirt["libvirt / QEMU"]
+    end
+
+    subgraph guest["SLES 16.0 guest — one static LAN IP, GPU passed through"]
+        drv["NVIDIA G06 driver<br>+ container toolkit"]
+        rke2["RKE2 + Traefik ingress"]
+        subgraph k8s["Workloads on RKE2"]
+            gpuop["GPU Operator"]
+            vllm["vLLM<br>Nemotron Nano 9B FP8"]
+            nv["NeuVector<br>runtime security"]
+            gw["OpenShell gateway<br>policies · rules · providers"]
+            subgraph sbx["One agent sandbox"]
+                agent["agent container<br>Landlock + seccomp, uid 10001"]
+                sup["supervisor pod<br>DNS + transparent proxy<br>OCSF audit log"]
+            end
+        end
+    end
+
+    inet(("Internet<br>approved hosts only"))
+
+    op -- "host.yml" --> host
+    op -- "guest.yml · stack.yml over SSH" --> guest
+    vfio --> libvirt --> drv --> gpuop --> vllm
+    br10 --> rke2
+    op -- "sandbox create · rule approve" --> gw
+    gw -- "policy push, hot reload" --> sup
+    agent -- "every connection<br>and DNS lookup" --> sup
+    sup -- "allowed + credential injected" --> inet
+    sup -- "internal model endpoint" --> vllm
+    nv -. "watches every pod" .-> sbx
+    op -- "sslip.io ingress: NeuVector UI, /vllm/v1" --> rke2
+```
+
+The agent never holds a credential and never talks to the network directly:
+DNS answers are synthetic addresses that only the supervisor can route, so a
+name that no approved rule covers is refused before a packet leaves the pod,
+and the refusal shows up as a pending rule for a human. [test/](test/) shows
+each of those steps happening.
 
 ## What this is not
 
