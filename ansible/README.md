@@ -207,7 +207,14 @@ SLES 16:
 - **NeuVector** — `https://neuvector.<guest-ip>.sslip.io/`, user `admin`.
   The chart generates the initial password; on the guest:
   `kubectl -n neuvector get secret neuvector-bootstrap-secret -o go-template='{{ .data.bootstrapPassword | base64decode }}'`.
-  Change it after the first login.
+  Change it after the first login. The controller keeps its settings in
+  memory only, so every controller restart, including a guest reboot,
+  resets them: the admin password goes back to this bootstrap value and API
+  keys are gone. After a guest reboot the controller can also start before
+  cluster DNS answers and then wait forever for its own service name; the UI
+  stays blank and the manager logs `UnknownHostException:
+  neuvector-svc-controller.neuvector`. Restart it:
+  `kubectl -n neuvector rollout restart deployment/neuvector-controller-pod`.
 - **OpenShell** — on the guest as the login user: `openshell status`,
   `openshell sandbox list`, `openshell sandbox create --name x --from <image>
   -- <command>`. A port-forward to the gateway runs as a systemd service and
