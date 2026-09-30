@@ -25,6 +25,7 @@ echo; echo "== teardown"
 sb_delete
 kubectl delete namespace "$NS" --ignore-not-found --wait=false >/dev/null 2>&1 || true
 openshell provider delete claimtest-echo >/dev/null 2>&1 || true
+rm -f ./.nv-credentials
 
 echo; echo "== summary"
 {

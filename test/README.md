@@ -23,7 +23,7 @@ Sources:
 | 4 | "zero direct git merges or Kubernetes API calls" | post | `t04-no-cluster-access.sh` — no service-account token in the sandbox, the API server is unreachable from it |
 | 5 | "dynamically injects real credentials at the network boundary so raw tokens never sit inside the agent environment" | post, deep | `t05-credentials-proxied.sh` — imports `claimtest-echo.profile.yaml` (same shape as the [upstream examples](https://github.com/NVIDIA/OpenShell/tree/main/providers)), creates a provider holding a fake secret, attaches it to a sandbox; the sandbox's environment and filesystem never contain the secret, while an in-cluster echo service named as the profile's endpoint receives it in the `Authorization` header |
 | 6 | "every decision lands in an OCSF-formatted audit log"; "logged by the enforcement layer, not by the agent" | deep | `t06-ocsf-audit-log.sh` — the deny and allow decisions from test 1 appear as `OCSF NET:OPEN … DENIED/ALLOWED` events in the log of the sandbox's supervisor pod, a separate pod the agent cannot reach (see test 4). In OpenShell 0.1.2 these are OCSF-classified event lines (class, activity, severity, decision, reason or policy), not JSON documents; nothing that looks like an audit file is visible from inside the sandbox |
-| 7 | NeuVector / SUSE Security does runtime scanning of the workloads | post | `t07-neuvector-sees-sandbox.sh` — NeuVector's API lists the sandbox pod as a monitored workload. Logs in with `NV_PASSWORD`, or with the chart's bootstrap admin password if that has not been changed yet; skipped if neither works |
+| 7 | NeuVector / SUSE Security does runtime scanning of the workloads | post | `t07-neuvector-sees-sandbox.sh` — the NeuVector controller's REST API lists the sandbox pod in its workload inventory. Authenticates with a NeuVector API key (`NV_APIKEY`, preferred) or the admin password (`NV_PASSWORD`); skipped without either |
 
 Not testable on this lab, and marked as such rather than faked: NemoClaw
 attaching without cluster credentials (not installed), NeMo Guardrails and
@@ -43,13 +43,16 @@ From the KVM host, using the lab's SSH key (copies this directory over and
 runs it there):
 
 ```bash
-NV_PASSWORD='…' bash test/run-from-host.sh     # NV_PASSWORD is optional
+bash test/run-from-host.sh
+NV_CRED_FILE=~/nv-credentials bash test/run-from-host.sh   # also runs test 7
 ```
 
-`NV_PASSWORD` is the NeuVector admin password. NeuVector makes you change the
-chart's bootstrap password at the first UI login, so once someone has logged
-in, test 7 needs the new password and is skipped without it; the other six
-tests do not need it.
+Test 7 needs NeuVector credentials; the other six do not. Create an API key
+in the NeuVector UI (Settings, API Keys, role `reader`) and put it in a
+mode-600 file as `NV_APIKEY=<name>:<secret>`, or the admin password as
+`NV_PASSWORD=…`. The file travels to the guest over SSH stdin, never on a
+command line, and `run.sh` deletes the copy when it finishes. The
+`NV_APIKEY` and `NV_PASSWORD` environment variables work too.
 
 `run.sh` creates one sandbox called `claimtest` (image `nicolaka/netshoot`,
 override with `SB_IMAGE`) plus a `claimtest` namespace for the echo service,

@@ -39,3 +39,6 @@ ansible/inventory.ini
 ansible/group_vars/all/
 ansible/.keys/
 *.retry
+
+# Claim tests: NeuVector credentials copied in for test 7
+test/.nv-credentials
