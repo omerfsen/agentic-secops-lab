@@ -197,6 +197,21 @@
   ansible.builtin.command: virsh autostart {{ '' if vm_autostart else '--disable ' }}{{ vm_name }}
   changed_when: false
 
+# Coming back from 'off' mode the domain exists but is shut off, and autostart
+# only acts at the next host boot. In permanent mode kvm_host's gate has
+# already proven every GPU function is on vfio-pci, so starting is safe here.
+# Never in on-demand mode: there a start is the live hand-over, gated on purpose.
+- name: Start the guest if it is shut off (permanent mode)
+  ansible.builtin.shell: |
+    set -o pipefail
+    if [ "$(virsh domstate {{ vm_name }})" = "shut off" ]; then
+      virsh start {{ vm_name }} >/dev/null && echo started
+    fi
+  args: {executable: /bin/bash}
+  register: vm_started
+  changed_when: "'started' in vm_started.stdout"
+  when: gpu_passthrough_mode == 'permanent'
+
 - name: Wait for SSH on the static address
   ansible.builtin.wait_for:
     host: "{{ vm_ip }}"
