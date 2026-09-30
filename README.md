@@ -46,6 +46,8 @@ What lives here:
 
 - **[Component inventory](docs/components.md)** — all 29 named components with their
   licences, and which are actually integrated today versus announced.
+- **[NVIDIA, SUSE and Red Hat compared](docs/vendor-designs.md)** — the three
+  designs built around OpenShell, side by side with this repository.
 - **Install notes** — [what fits on one VM](docs/single-vm.md),
   [SLES and KVM setup](docs/sles-kvm.md), [GPU sizing](docs/gpu-sizing.md),
   and [moving the GPU between host and guest](docs/gpu-modes.md).
@@ -177,6 +179,7 @@ The articles and the announcement:
 - SUSE, [We Gave Our Agents Autonomy. Here's How We Kept Control][suse-post]
 - SUSE, [Agentic SecOps on SUSE AI Factory with NVIDIA Agent Safety Platform](https://www.suse.com/c/agentic-secops-on-suse-ai-factory-with-nvidia-agent-safety-platform/)
 - NVIDIA, [Open Agent Safety Platform announcement](https://nvidianews.nvidia.com/news/open-agent-safety-platform)
+- Red Hat, [Why Red Hat is building secure agent onboarding](https://www.redhat.com/en/blog/why-red-hat-is-building-secure-agent-onboarding) and the [Secure Agent Workspace pattern](https://github.com/validatedpatterns-sandbox/secure-agent-workspace); compared in [docs/vendor-designs.md](docs/vendor-designs.md)
 - [SUSE AI](https://www.suse.com/products/ai/) and [SUSE Security (NeuVector)](https://www.suse.com/products/neuvector/) product pages
 
 The sandbox layer:
