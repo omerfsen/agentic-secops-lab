@@ -62,8 +62,13 @@ only matter if you change something.
   early boot; the host console lives on the iGPU (motherboard HDMI/DP, the
   IP-KVM). If you want BIOS/GRUB on the iGPU too, set the firmware's primary
   display to it.
-- `nvidia-cdi-refresh.service` logs a failure at boot while the guest owns
-  the card. Harmless: it just has no driver to refresh from.
+- `nvidia-cdi-refresh.service` and `nvidia-persistenced.service` log a
+  failure at boot while the guest owns the card. Harmless: there is no
+  driver for them to talk to.
+- The NVIDIA modules are refused outright in this mode, not only
+  blacklisted. The driver package's udev rule would otherwise load them in a
+  loop, every attempt failing, and flood the host console with
+  `NVRM: GPU … is already bound to vfio-pci` several times a second.
 
 ## The experimental third state (`on-demand`)
 

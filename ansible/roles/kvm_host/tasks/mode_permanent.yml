@@ -16,7 +16,15 @@
     - "/etc/libvirt/hooks/qemu.d/{{ vm_name }}-gpu-handover"
     - /etc/modprobe.d/vfio-pci-options.conf
 
-- name: Blacklist host GPU drivers
+# `blacklist` only stops loading by device alias. The NVIDIA driver package
+# also ships a udev rule (71-nvidia.rules) that runs `modprobe nvidia-drm`,
+# `nvidia-modeset` and `nvidia-uvm` every time the nvidia driver registers.
+# With the card on vfio-pci each load fails ("No NVIDIA devices probed"),
+# unregisters and re-triggers the rule: a loop that floods the host console
+# with "NVRM: ... is already bound to vfio-pci" several times a second.
+# `install ... /bin/false` makes modprobe refuse the modules, which ends it.
+# Off mode deletes this file, so the host driver loads normally again.
+- name: Keep the host GPU drivers from loading
   ansible.builtin.copy:
     dest: /etc/modprobe.d/blacklist-gpu-passthrough.conf
     mode: "0644"
@@ -25,13 +33,18 @@
       blacklist nvidia
       blacklist nvidia_drm
       blacklist nvidia_modeset
+      blacklist nvidia_uvm
       options nouveau modeset=0
+      install nvidia /bin/false
+      install nvidia_drm /bin/false
+      install nvidia_modeset /bin/false
+      install nvidia_uvm /bin/false
   register: gpu_blacklist
 
 # The softdeps cover anything that still loads a driver by name despite the
-# blacklist (nvidia-modprobe, udev coldplug of the HDMI audio function via
-# snd_hda_intel): vfio-pci is loaded first and claims the ids, so the other
-# driver finds nothing left to bind.
+# blacklist (udev coldplug of the HDMI audio function via snd_hda_intel,
+# nouveau): vfio-pci is loaded first and claims the ids, so the other driver
+# finds nothing left to bind.
 - name: Bind the devices to vfio-pci at boot
   ansible.builtin.copy:
     dest: /etc/modprobe.d/vfio.conf
