@@ -13,7 +13,7 @@ ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLeve
 
 echo "== copying test/ to $user@$host"
 ssh "${ssh_opts[@]}" "$user@$host" 'mkdir -p ~/claimtest'
-scp -q "${ssh_opts[@]}" "$here"/*.sh "$here"/*.yaml "$here"/README.md "$user@$host:~/claimtest/"
+scp -q -r "${ssh_opts[@]}" "$here"/*.sh "$here"/*.yaml "$here"/README.md "$here"/probes "$user@$host:~/claimtest/"
 # NeuVector credentials for test 7 go over as a mode-600 file on stdin, never
 # on a command line: NV_CRED_FILE (a local file with NV_APIKEY=/NV_PASSWORD=
 # lines), or the NV_APIKEY / NV_PASSWORD variables. run.sh deletes the copy.

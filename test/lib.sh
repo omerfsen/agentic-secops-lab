@@ -24,10 +24,28 @@ evidence() { printf '    > %s\n' "$*"; }
 # Run a shell command inside the sandbox; prints output, returns its rc.
 # Wrapped in `timeout`: right after creation the CLI can hang forever if it
 # races the supervisor's SSH relay, and --timeout only bounds the command.
+# stdin is closed on purpose: with it left open the exec often never returns.
 sb_exec() {
   timeout -k 5 "$(( ${SB_EXEC_TIMEOUT:-60} + 30 ))" \
-    openshell sandbox exec -n "$SB" --timeout "${SB_EXEC_TIMEOUT:-60}" -- sh -c "$*" 2>&1
+    openshell sandbox exec -n "$SB" --timeout "${SB_EXEC_TIMEOUT:-60}" -- sh -c "$*" </dev/null 2>&1
 }
+
+# The control: the same container and uid entered with kubectl exec, so the
+# process has neither OpenShell's Landlock domain nor its seccomp filters, only
+# what Kubernetes gives the pod. A result that differs between sb_exec and
+# ctl_exec is OpenShell's doing; one that is the same is not.
+ctl_exec() {
+  local pns pname; read -r pns pname < <(sb_pod)
+  [ -z "$pname" ] && { echo "no sandbox pod"; return 1; }
+  timeout 90 kubectl -n "$pns" exec "$pname" -c agent -- env HOME=/sandbox sh -c "$*" </dev/null 2>&1
+}
+
+# Run a local script inside the sandbox or the control (shipped base64 on argv).
+sb_script()  { sb_exec  "echo $(base64 -w0 "$1") | base64 -d > /tmp/.ct.sh && sh /tmp/.ct.sh; rm -f /tmp/.ct.sh"; }
+ctl_script() { ctl_exec "echo $(base64 -w0 "$1") | base64 -d > /tmp/.ct.sh && sh /tmp/.ct.sh; rm -f /tmp/.ct.sh"; }
+
+# value of "key value" lines printed by those scripts
+kv() { echo "$1" | awk -v k="$2" '$1==k {sub(/^[^ ]+ /,""); print; exit}'; }
 
 sb_phase() { openshell sandbox get "$SB" 2>/dev/null | awk '/PHASE|Phase|phase/{print $NF; exit}'; }
 

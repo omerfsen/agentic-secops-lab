@@ -8,7 +8,7 @@
 #   NV_APIKEY=… and/or NV_PASSWORD=… lines — how run-from-host.sh passes them
 # Nothing secret is printed, and secrets never go on a command line.
 . "$(dirname "$0")/lib.sh"
-ID=t07; CLAIM="NeuVector monitors the sandbox workload"
+ID=t07; CLAIM="NeuVector monitors the sandbox at runtime (sees the processes it runs)"
 NV_CRED_FILE="${NV_CRED_FILE:-$(dirname "$0")/.nv-credentials}"
 if [ -f "$NV_CRED_FILE" ]; then
   [ -z "${NV_APIKEY:-}" ]   && NV_APIKEY=$(sed -n 's/^NV_APIKEY=//p' "$NV_CRED_FILE" | head -1)
@@ -38,27 +38,37 @@ else
   printf 'X-Auth-Token: %s\n' "$token" > "$tmp/hdr"; how="admin password"
 fi
 
+uid=$(kubectl -n "$pns" get pod "$pname" -o jsonpath='{.metadata.uid}')
 code=$(curl -sk -m 30 -o "$tmp/wl.json" -w '%{http_code}' "$API/workload" -H @"$tmp/hdr")
-[ -n "$token" ] && curl -sk -m 10 -X DELETE "$API/auth" -H @"$tmp/hdr" >/dev/null 2>&1
-[ "$code" != "200" ] && { fail $ID "$CLAIM" "controller API answered HTTP $code to GET /v1/workload with the $how"; exit 0; }
-
-found=$(python3 - "$pname" "$tmp/wl.json" <<'PY'
+[ "$code" != "200" ] && { [ -n "$token" ] && curl -sk -m 10 -X DELETE "$API/auth" -H @"$tmp/hdr" >/dev/null 2>&1
+  fail $ID "$CLAIM" "controller API answered HTTP $code to GET /v1/workload with the $how"; exit 0; }
+# the RUNNING agent container of THIS pod: exact pod name, namespace and UID; no pause, init or exited entries
+agent=$(python3 - "$pname" "$pns" "$uid" "$tmp/wl.json" <<'PYX'
 import json, sys
-pod, path = sys.argv[1], sys.argv[2]
+pod, ns, uid, path = sys.argv[1:]
 ws = json.load(open(path)).get("workloads", [])
-hits = [w for w in ws if pod in (w.get("pod_name", ""), w.get("display_name", "")) or pod in w.get("name", "")]
-print(len(ws), len(hits))
-for w in hits[:3]:
-    print("  %s | domain=%s state=%s mode=%s service=%s" % (w.get("display_name") or w.get("name"),
-          w.get("domain", "?"), w.get("state", "?"), w.get("policy_mode", "?"), w.get("service", "?")))
-PY
+a = [w for w in ws if w.get("pod_name") == pod and w.get("domain") == ns and w.get("running")
+     and w.get("name", "").startswith("k8s_agent_%s_%s_%s_" % (pod, ns, uid))]
+print(a[0]["id"] if a else "", a[0].get("state", "?") if a else "", a[0].get("policy_mode", "?") if a else "", len(ws))
+PYX
 )
-read -r total hits <<< "$(echo "$found" | head -1)"
-evidence "logged in to the controller API with the $how; NeuVector lists $total workloads, $hits match pod $pns/$pname"
-echo "$found" | tail -n +2 | while read -r l; do [ -n "$l" ] && evidence "$l"; done
-
-if [ "${hits:-0}" -ge 1 ]; then
-  pass $ID "$CLAIM" "the sandbox pod is in NeuVector's workload inventory ($(echo "$found" | sed -n 2p | sed 's/^ *//' | cut -c1-120))"
+read -r aid astate amode total <<< "$agent"
+evidence "logged in to the controller API with the $how; $total workloads listed; running agent container of $pns/$pname: ${aid:-NOT FOUND} (state=${astate:-?}, mode=${amode:-?})"
+if [ -z "$aid" ]; then
+  [ -n "$token" ] && curl -sk -m 10 -X DELETE "$API/auth" -H @"$tmp/hdr" >/dev/null 2>&1
+  fail $ID "$CLAIM" "NeuVector does not list a running agent container for $pns/$pname"; exit 0
+fi
+# behavioural monitoring: a uniquely named real binary run inside the sandbox must show up in NeuVector's process history
+mark="nvmark$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+sb_exec "cp \$(readlink -f /usr/bin/curl) /tmp/$mark && /tmp/$mark --version >/dev/null; rm -f /tmp/$mark" >/dev/null
+seen() { curl -sk -m 15 "$API/workload/$aid/process_history" -H @"$tmp/hdr" | grep -q "\"$mark\""; }
+t0=$(date +%s); if wait_until 60 seen; then sec=$(( $(date +%s) - t0 )); else sec=""; fi
+scan=$(curl -sk -m 15 "$API/scan/config" -H @"$tmp/hdr" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("config", d).get("auto_scan"))' 2>/dev/null)
+[ -n "$token" ] && curl -sk -m 10 -X DELETE "$API/auth" -H @"$tmp/hdr" >/dev/null 2>&1
+if [ -n "$sec" ]; then evidence "process $mark started in the sandbox: recorded by NeuVector within ${sec}s"; else evidence "process $mark started in the sandbox: NOT recorded within 60s"; fi
+evidence "vulnerability auto-scan: ${scan:-unknown}; image and container CVE scanning is not exercised by this test"
+if [ -n "$sec" ]; then
+  pass $ID "$CLAIM" "NeuVector tracks the running sandbox container and recorded a process started inside it within ${sec}s"
 else
-  fail $ID "$CLAIM" "NeuVector lists $total workloads but not the sandbox pod $pname"
+  fail $ID "$CLAIM" "NeuVector lists the container but did not record a process started inside it"
 fi

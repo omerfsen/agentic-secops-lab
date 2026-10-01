@@ -15,7 +15,7 @@ column.
 | **Identity** | Sentry gives every agent a verifiable identity, on BlueField-4 | Not detailed | Keycloak sign-in per user | None yet |
 | **Secrets** | OpenShell providers | OpenShell providers | Vault with External Secrets Operator | OpenShell providers, tested |
 | **Policy and approvals** | Human approval, or automatic approval within set limits | Approved in the OpenShell CLI | Policy in Git, applied by Argo CD | Approved in the CLI, tested |
-| **Audit** | Allow and deny log, collected centrally | OCSF log into SUSE Observability | OCSF denials | OCSF log in the supervisor pod, tested |
+| **Audit** | Allow and deny log, collected centrally | OCSF log into SUSE Observability | OCSF denials | OCSF log of network decisions in the supervisor pod, tested; filesystem denials are not logged |
 | **Watching from outside** | Sentry on BlueField-4, keeps working if the host is compromised | NeuVector on every pod | Not in the pattern | NeuVector installed |
 | **Model** | Any; Nemotron and NeMo Guardrails offered | Nemotron on NIM, local | External providers by default, vLLM optional | Nemotron Nano on vLLM, local |
 | **Agents** | Claude Code, Codex, OpenCode, Copilot CLI, OpenClaw, NemoClaw, or your own | SUSE SecOps blueprints | NemoClaw, OpenClaw | None yet |
@@ -45,11 +45,11 @@ column.
 ## Where this repository sits
 
 It covers the software line, the layer every design shares, and the claim
-tests pass on it, so they would give the same results on any of the three
-stacks. Structurally it resembles one of Red Hat's per-user VMs: one VM
+tests exercise it. The OpenShell parts should behave the same wherever
+OpenShell runs, but they have only been checked here. Structurally it resembles one of Red Hat's per-user VMs: one VM
 holding OpenShell and its sandboxes, except that it runs RKE2 and a local
 model inside. The gaps are the ones in the README's "What's next": sign-in,
-real agents, and NeuVector confirming it sees the sandboxes. The hardware
+real agents, and NeuVector's vulnerability scanning of the sandboxes. The hardware
 line needs BlueField-4 and is out of reach on a workstation.
 
 ## Sources

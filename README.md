@@ -27,13 +27,19 @@ and verified end to end, plus the notes and inventory that went into it:
   serving Nemotron Nano 9B (FP8) on the one GPU with an OpenAI-style API,
   and the OpenShell gateway with the Agent Sandbox CRDs and CLI — from
   `ansible/stack.yml`, each piece behind its own switch.
-- **The proof.** Scripts under `test/` that create a sandbox and exercise
-  the claims one by one: egress denied until a human approves a rule and
-  allowed without a restart afterwards, Landlock keeping system paths and
-  shell profiles read-only, seccomp with no privilege path, no Kubernetes API
-  from inside, credentials injected by the supervisor rather than handed to
-  the agent, and every decision recorded as an OCSF event outside the
-  sandbox. Each test prints the evidence it saw.
+- **The proof.** Scripts under `test/` that create a sandbox and test each
+  claim against a control, the same container entered without OpenShell's
+  protections, so a pass points at the mechanism named. Confirmed: egress
+  denied by default and opened per host by an approved rule without a
+  restart; Landlock refusing paths that ordinary permissions allow;
+  OpenShell's own seccomp filters on top of Kubernetes defaults, with setuid
+  binaries unable to raise privilege; no Kubernetes credential or API path;
+  credentials injected at the network boundary and never present in the
+  sandbox; network decisions logged as OCSF events by a separate supervisor
+  pod; NeuVector seeing the processes the sandbox runs. Not confirmed: that
+  "every decision" is logged, since filesystem denials are not. Each test
+  prints the evidence it saw, and [test/README.md](test/README.md) lists what
+  each one does not cover.
 - **The reading.** A component inventory with licences, what fits on one
   VM and what does not, GPU sizing, and how to move the GPU between host and
   guest.
@@ -95,16 +101,16 @@ flowchart TB
     gw -- "policy push, hot reload" --> sup
     agent -- "every connection<br>and DNS lookup" --> sup
     sup -- "allowed + credential injected" --> inet
-    sup -- "internal model endpoint" --> vllm
+    sup -. "model endpoint, once a rule allows it" .-> vllm
     nv -. "watches every pod" .-> sbx
     op -- "sslip.io ingress: NeuVector UI, /vllm/v1" --> rke2
 ```
 
-The agent never holds a credential and never talks to the network directly:
-DNS answers are synthetic addresses that only the supervisor can route, so a
-name that no approved rule covers is refused before a packet leaves the pod,
-and the refusal shows up as a pending rule for a human. [test/](test/) shows
-each of those steps happening.
+The agent holds placeholders, never the real credentials, and cannot reach
+the network directly: DNS answers are synthetic addresses that only the
+supervisor can route, so a name that no approved rule covers is refused
+before a packet leaves the pod, and the attempt shows up as a pending rule
+to approve. [test/](test/) shows each of those steps happening.
 
 ## What this is not
 
@@ -145,10 +151,13 @@ complete deployment.
 Things the lab is set up for but does not do yet, roughly in the order they
 make sense:
 
-- **Close the loop with NeuVector.** Run the seventh test with the admin
-  password, then go further: have NeuVector's network rules and alerts
-  react to a sandbox doing something denied, so both layers are visible in
-  one run.
+- **Close the loop with NeuVector.** Turn on its vulnerability auto-scan,
+  give the controller a persistent volume so its settings survive a reboot,
+  then have NeuVector's network rules and alerts react to a sandbox doing
+  something denied, so both layers are visible in one run.
+- **Log every decision.** Filesystem denials do not reach OpenShell's audit
+  log today, and its OCSF JSON output is off by default. Turn the JSON sink
+  on and follow upstream for filesystem events.
 - **A real SecOps agent.** SUSE's remediation agent ships as a blueprint,
   not a repo. Build a small one: an agent inside a sandbox that reads
   NeuVector events through an approved rule, asks the local vLLM endpoint
